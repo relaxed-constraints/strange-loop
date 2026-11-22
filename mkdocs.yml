@@ -6,6 +6,7 @@ nav:
       - Build a flow: index.md
       - Example — follow one repair: guide/one-repair.md
       - Batch and check items: guide/verification.md
+      - Repair or replace items: guide/candidates.md
       - Inspect revisions: guide/lineage.md
   - API Reference: reference.md
 plugins:

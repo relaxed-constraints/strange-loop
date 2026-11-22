@@ -18,7 +18,7 @@ Import workflow components from `strange_loop`. The runner supplies the context 
 
 ::: strange_loop.keyed
     options:
-      members: []
+      members: [select]
 
 ::: strange_loop.Pass
     options:
@@ -47,3 +47,19 @@ Import workflow components from `strange_loop`. The runner supplies the context 
 ::: strange_loop.core.Store
     options:
       members: [read, inputs, consumers]
+
+::: strange_loop.core.Context.candidates
+
+::: strange_loop.core.Checked.passed
+
+::: strange_loop.candidates.Candidates
+    options:
+      members: [accept, report]
+
+::: strange_loop.Fail
+
+::: strange_loop.Failure
+
+::: strange_loop.Candidate
+
+::: strange_loop.CandidateReport

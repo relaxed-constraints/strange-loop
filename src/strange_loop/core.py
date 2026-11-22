@@ -10,6 +10,8 @@ from copy import copy
 from dataclasses import dataclass
 from typing import Any
 
+from .candidates import Candidates, Fail
+
 _active = ContextVar("invocation")
 
 
@@ -45,6 +47,23 @@ class Keyed(dict):
 
     Construct this mapping with the public name `keyed`. Each key becomes
     a separate logical item and retains its own output revision."""
+
+
+    def select(self, keys):
+        """Return the references for the specified keys."""
+        return Keyed({key: self[key] for key in keys})
+
+
+class Checked(Keyed):
+    """Map passing keys to verdict references."""
+
+    def __init__(self, results, rows):
+        super().__init__(results)
+        self.rows = rows
+
+    def passed(self, name):
+        """Return the named input reference for each passing key."""
+        return Keyed({key: self.rows[key][name] for key in self})
 
 
 keyed = Keyed
@@ -149,7 +168,9 @@ class Node:
                 for k in groups[0]
             }
         path = ctx.child(self.name)
-        results = await ctx.runner.execute(self, path, rows)
+        results = await ctx.runner.execute(self, path, rows, ctx, mapped)
+        if mapped and self.kind == "grader":
+            return Checked(results, rows)
         return Keyed(results) if mapped else results.get("")
 
 
@@ -186,7 +207,7 @@ def grader(*, repairable) -> Callable:
 
     Returns:
         A decorator for a function accepting a context and decoded values.
-            The function must return a Pass or Repair verdict.
+            The function must return Pass, Repair, or a candidate Fail verdict.
     """
     return lambda fn: Node(fn, "grader", repairable)
 
@@ -215,9 +236,14 @@ class AgentStage(Node):
         repair_instructions (str | None): Replacement prompt for a direct repair.
             When omitted, the stage uses its original instructions.
         output (type): Exact built-in type expected for each JSON output.
+        max_repairs (int | None): Repairs per candidate for this producer.
+            Defaults to the runner limit.
         batching (Batch | None): Optional limit on the number of items per backend turn.
     """
-    def __init__(self, *, name, instructions, output, batching=None, repair_instructions=None):
+    def __init__(self, *, name, instructions, output, batching=None, repair_instructions=None, max_repairs=None):
+        if max_repairs is not None and max_repairs < 0:
+            raise ValueError("max_repairs must be nonnegative")
+        self.max_repairs = max_repairs
         self.repair_instructions = repair_instructions
         self.name, self.instructions, self.output = name, instructions, output
         if output not in (str, int, float, bool, dict, list):
@@ -229,6 +255,21 @@ class Context:
     def __init__(self, runner, path, args):
         self.runner, self.path, self.args = runner, path, args
         self.counts = {}
+        self.scope = None
+        self.item = None
+
+    def candidates(self, items: Keyed, *, max_candidates: int = 1, on_failure: str = "stop") -> Candidates:
+        """Create an async loop over independent slots.
+
+        Args:
+            items: Keyed input references, one per slot.
+            max_candidates: Maximum candidates per slot, including the first.
+            on_failure: Use "replace" for a fresh candidate or "stop" to close the slot.
+
+        Returns:
+            A candidate loop with a report of outputs, failures, and history.
+        """
+        return Candidates(self, items, max_candidates, on_failure)
 
     def child(self, name):
         count = self.counts.get(name, 0)
@@ -263,6 +304,9 @@ class Runner:
         self.backend, self.attempts, self.max_repairs = backend, attempts, max_repairs
         self.pending = {}
         self.cache = {}
+        self.candidate_history = {}
+        self.candidate_counts = {}
+        self.candidate_failures = {}
         self.running = False
 
     async def run(self, workflow, **kwargs) -> Any:
@@ -289,6 +333,9 @@ class Runner:
     async def _run(self, workflow, kwargs):
         self.pending.clear()
         self.cache.clear()
+        self.candidate_history.clear()
+        self.candidate_counts.clear()
+        self.candidate_failures.clear()
         path = (uuid.uuid4().hex, workflow.name)
 
         def bind(name, value):
@@ -314,25 +361,43 @@ class Runner:
                 self.pending[slot] = (target, feedback)
         raise RuntimeError("repair budget exhausted")
 
-    async def call_flow(self, node, path, args):
+    async def call_flow(self, node, path, args, scope=None, item=None):
         ctx = Context(self, path, args)
+        ctx.scope, ctx.item = scope, item
         token = _active.set(ctx)
         try:
             return await node.fn(ctx, **args)
         finally:
             _active.reset(token)
 
-    async def execute(self, node, path, rows):
+    async def execute(self, node, path, rows, parent, mapped):
         results, jobs = {}, {}
         for key, args in rows.items():
-            slot = json.dumps((*path, key))
+            scope = parent.scope
+            item = parent.item if parent.item is not None else key
+            row_path = (*path, key)
+            if scope is not None:
+                if item not in scope.active or (parent.item is None and not mapped):
+                    raise ValueError("map candidate work over the pending keys")
+                candidate = scope.current(item)
+                if candidate.failure or item in scope.requests:
+                    continue
+                row_path = (*row_path, "candidate", scope.items[item].id, candidate.number)
+            slot = json.dumps(row_path)
             if node.kind == "flow":
-                results[key] = await self.call_flow(node, (*path, key), args)
+                results[key] = await self.call_flow(node, row_path, args, scope, item if scope else None)
                 continue
             bindings = {n: r.id for n, r in args.items()}
             prior = self.cache.get(slot)
             repair = self.pending.pop(slot, None)
+            if scope and repair:
+                scope.counts[slot] = scope.counts.get(slot, 0) + 1
+                candidate.repairs[node.name] = candidate.repairs.get(node.name, 0) + 1
             if prior and not repair and self.store.record(prior)[1] == bindings:
+                failure = self.candidate_failures.get(prior)
+                if scope and failure:
+                    scope.reject(item, node.name, failure.reason, failure.feedback, prior)
+                    continue
                 results[key] = prior
                 continue
             if node.kind == "agent":
@@ -347,12 +412,26 @@ class Runner:
                 if isinstance(value, Repair):
                     if value.target not in [args[n] for n in node.repairable]:
                         raise ValueError("undeclared repair route")
-                    self.store.save(
+                    verdict = self.store.save(
                         slot,
                         {"repair": value.target.id, "feedback": value.feedback},
                         bindings,
                     )
-                    self.repairs.append((value.target, value.feedback))
+                    if scope:
+                        scope.request(item, node.name, value, verdict)
+                        if candidate.failure:
+                            self.candidate_failures[verdict] = candidate.failure
+                            self.cache[slot] = verdict
+                    else:
+                        self.repairs.append((value.target, value.feedback))
+                    continue
+                if isinstance(value, Fail):
+                    if scope is None:
+                        raise ValueError("Fail requires a candidate loop")
+                    verdict = self.store.save(slot, {"fail": value.reason}, bindings)
+                    scope.reject(item, node.name, "explicit_failure", value.reason, verdict)
+                    self.candidate_failures[verdict] = candidate.failure
+                    self.cache[slot] = verdict
                     continue
                 if not isinstance(value, Pass):
                     raise ValueError("expected Pass or Repair")
@@ -375,6 +454,15 @@ class Runner:
                     attempt_node = copy(node)
                     attempt_node.instructions = prompt
                 await self.generate(attempt_node, group, results)
+        if parent.scope and node.kind in ("agent", "stage"):
+            limit = getattr(node, "max_repairs", None)
+            for key, ref in results.items():
+                item = parent.item if parent.item is not None else key
+                number = parent.scope.current(item).number
+                slot = json.dumps((*path, key, "candidate", parent.scope.items[item].id, number))
+                parent.scope.targets[ref] = (
+                    item, number, slot, self.max_repairs if limit is None else limit
+                )
         return results
 
     def packet(self, args, repair):

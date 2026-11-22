@@ -55,7 +55,7 @@ The batch size controls how many items an agent receives in one turn. Omit `batc
 
 If a grader targets a shared input, the runner revisits each stage that used the revised input. A child flow can request a repair from an agent stage in its parent flow.
 
-The runner allows up to `max_repairs` repair rounds per run. A backend interruption uses a separate limit, `attempts`. The runner retries missing items after a partial submission.
+Outside a candidate loop, the runner allows up to `max_repairs` repair rounds per run. A backend interruption uses a separate limit, `attempts`. The runner retries missing items after a partial submission.
 
 ## Use named inputs in a prompt
 
