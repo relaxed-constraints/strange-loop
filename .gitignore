@@ -1,0 +1,27 @@
+# Documentation build
+/site/
+/.cache/
+
+# Python environments and build output
+.venv/
+__pycache__/
+*.py[co]
+/build/
+/dist/
+*.egg-info/
+
+# Local checks and notebook checkpoints
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+.ipynb_checkpoints/
+
+# Local SQLite run stores and their sidecar files
+*.sqlite
+*.sqlite-journal
+*.sqlite-shm
+*.sqlite-wal
+
+# macOS metadata
+.DS_Store
