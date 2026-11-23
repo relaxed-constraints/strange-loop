@@ -161,3 +161,31 @@ class CandidateTests(unittest.IsolatedAsyncioTestCase):
     async def test_schema_change_regenerates_q05(self):
         self.assertEqual(await self.exercise_outer_replay("schema"),
                          ({"generate": 2, "translate": 2}, 2))
+
+    async def test_missing_submission_retries_only_missing_and_continues_next_batch(self):
+        calls = []
+        class Partial:
+            async def generate(self, node, entries, lineage, submit):
+                calls.append(entries)
+                for key in entries:
+                    if key != "q0287":
+                        submit(key, key)
+                return {"q0287": "Expected q0287.json; file missing."}
+
+        producer = AgentStage(name="translate", instructions="", output=str, batching=Batch(2))
+        @flow
+        async def workload(ctx, cases):
+            async with ctx.candidates(cases, max_candidates=1, on_failure="stop") as loop:
+                async for pending in loop:
+                    loop.accept(await producer.map(case=pending))
+            return loop.report()
+
+        runner = Runner(backend=Partial())
+        report = await runner.run(workload, cases=keyed(q0287=1, q0288=2, q0289=3))
+        self.assertEqual([list(entries) for entries in calls], [
+            ["q0287", "q0288"], ["q0287"], ["q0287"], ["q0289"]
+        ])
+        self.assertIn("q0287.json", calls[1]["q0287"]["submission_feedback"])
+        self.assertEqual(set(report.outputs), {"q0288", "q0289"})
+        self.assertEqual(report.failures["q0287"].reason, "missing_submission")
+        self.assertEqual(report.history["q0287"][0].repairs, {})

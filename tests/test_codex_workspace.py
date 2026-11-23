@@ -1,6 +1,9 @@
+import asyncio
 import json
 import sys
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -105,3 +108,118 @@ class WorkspaceContract(unittest.IsolatedAsyncioTestCase):
             ],
         )
         self.assertEqual(results, {"q01": ["corrected"]})
+
+    async def test_retention_is_per_attempt_and_preserves_failed_workspace(self):
+        class Agent:
+            @classmethod
+            async def launch(cls, *, workspace, artifacts_dir):
+                agent = cls()
+                agent.workspace = workspace
+                (artifacts_dir / "trace.json").write_text("{}")
+                return agent
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *exc):
+                pass
+
+            async def send(self, message):
+                (self.workspace / "good.json").write_text("{}")
+                (self.workspace / "invalid.json").write_text("{")
+                (self.workspace / "wrong.json").write_text("[]")
+                (self.workspace / "link.json").symlink_to("good.json")
+                (self.workspace / "work.json").write_text("changed during turn")
+
+            async def events(self):
+                yield SimpleNamespace(status="completed")
+
+        with (
+            TemporaryDirectory() as directory,
+            patch.dict(
+                sys.modules,
+                codex_box=SimpleNamespace(Agent=Agent, TurnCompleted=SimpleNamespace),
+            ),
+        ):
+            root = Path(directory)
+            backend = CodexBackend(attempts_dir=root)
+            results = {}
+            for keys in (["good"], ["good", "invalid", "wrong", "missing", "link"]):
+                diagnostics = await backend.generate(
+                    AgentStage(name="test", instructions="Inspect {task}", output=dict),
+                    dict.fromkeys(keys, self.entry),
+                    self.lineage,
+                    results.__setitem__,
+                )
+            _, work = _prepare_work(
+                "",
+                {
+                    "missing": {
+                        **self.entry,
+                        "submission_feedback": diagnostics["missing"],
+                    }
+                },
+                self.lineage,
+            )
+            self.assertEqual(
+                json.loads(work["missing"]["submission_feedback"]),
+                {"output_file": "missing.json", "status": "missing"},
+            )
+            self.assertEqual(results, {"good": {}})
+            attempts = list(root.iterdir())
+            self.assertEqual(len(attempts), 2)
+            for attempt in attempts:
+                self.assertTrue((attempt / "trace.json").is_file())
+                self.assertIn("Inspect inspect", (attempt / "prompt.txt").read_text())
+                work = json.loads((attempt / "work.json").read_text())
+                self.assertEqual((attempt / "workspace").exists(), len(work) > 1)
+                if len(work) > 1:
+                    collection = json.loads((attempt / "collection.json").read_text())
+                    self.assertEqual(
+                        {k: v["status"] for k, v in collection.items()},
+                        {
+                            "good": "submitted",
+                            "invalid": "invalid_json",
+                            "wrong": "wrong_type",
+                            "missing": "missing",
+                            "link": "not_regular_file",
+                        },
+                    )
+                    self.assertEqual(
+                        (attempt / "workspace/invalid.json").read_text(), "{"
+                    )
+
+    async def test_cancel_during_launch_closes_box_before_workspace_removal(self):
+        started, release = asyncio.Event(), asyncio.Event()
+        closed = []
+
+        class Agent:
+            @classmethod
+            async def launch(cls, *, workspace):
+                started.set()
+                await release.wait()
+                agent = cls()
+                agent.workspace = workspace
+                return agent
+
+            async def close(self):
+                closed.append(self.workspace.is_dir())
+
+        with patch.dict(
+            sys.modules,
+            codex_box=SimpleNamespace(Agent=Agent, TurnCompleted=SimpleNamespace),
+        ):
+            task = asyncio.create_task(
+                CodexBackend().generate(
+                    AgentStage(name="generate", instructions="", output=dict),
+                    {"a": self.entry},
+                    self.lineage,
+                    lambda key, value: None,
+                )
+            )
+            await asyncio.wait_for(started.wait(), 2)
+            task.cancel()
+            release.set()
+            with self.assertRaises(asyncio.CancelledError):
+                await asyncio.wait_for(task, 2)
+            self.assertEqual(closed, [True])

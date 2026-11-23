@@ -1,5 +1,6 @@
-"""Serial, revision-aware workflows over JSON artifacts."""
+"""Revision-aware workflows over JSON artifacts."""
 
+import asyncio
 import inspect
 import json
 import sqlite3
@@ -218,10 +219,14 @@ class Batch:
 
     Args:
         max_items: Positive upper limit on items per turn.
+        concurrency: Maximum simultaneous batches in one mapped call. Defaults to one.
     """
     max_items: int
+    concurrency: int = 1
 
     def __post_init__(self):
+        if type(self.concurrency) is not int or self.concurrency < 1:
+            raise ValueError("concurrency must be a positive integer")
         if self.max_items < 1:
             raise ValueError("max_items must be positive")
 
@@ -249,6 +254,7 @@ class AgentStage(Node):
         if output not in (str, int, float, bool, dict, list):
             raise ValueError("output must be a JSON type")
         self.kind, self.batch_size = "agent", batching.max_items if batching else 1
+        self.concurrency = batching.concurrency if batching else 1
 
 
 class Context:
@@ -453,7 +459,7 @@ class Runner:
                 if prompt != node.instructions:
                     attempt_node = copy(node)
                     attempt_node.instructions = prompt
-                await self.generate(attempt_node, group, results)
+                await self.generate(attempt_node, group, results, parent)
         if parent.scope and node.kind in ("agent", "stage"):
             limit = getattr(node, "max_repairs", None)
             for key, ref in results.items():
@@ -463,6 +469,8 @@ class Runner:
                 parent.scope.targets[ref] = (
                     item, number, slot, self.max_repairs if limit is None else limit
                 )
+        if jobs and node.concurrency > 1:
+            return {key: results[key] for key in rows if key in results}
         return results
 
     def packet(self, args, repair):
@@ -481,35 +489,66 @@ class Runner:
                 roots.extend(Ref(i) for i in inputs.values())
         return packet, records
 
-    async def generate(self, node, jobs, results):
+    async def generate(self, node, jobs, results, parent):
         keys = list(jobs)
-        for offset in range(0, len(keys), node.batch_size):
-            missing = dict.fromkeys(keys[offset : offset + node.batch_size])
-            for attempt in range(self.attempts):
-                entries, lineage = {}, {}
+        batch_offsets = range(0, len(keys), node.batch_size)
+        offsets = iter(batch_offsets)
+
+        async def worker():
+            for offset in offsets:
+                batch = keys[offset : offset + node.batch_size]
+                await self._generate_batch(node, batch, jobs, results, parent)
+
+        workers = min(node.concurrency, len(batch_offsets))
+        if workers == 1:
+            await worker()
+        else:
+            async with asyncio.TaskGroup() as group:
+                for _ in range(workers):
+                    group.create_task(worker())
+
+    async def _generate_batch(self, node, keys, jobs, results, parent):
+        missing = dict.fromkeys(keys)
+        feedback = {}
+        for attempt in range(self.attempts):
+            entries, lineage = {}, {}
+            for key in missing:
+                entries[key], records = jobs[key][2]
+                if key in feedback:
+                    entries[key] = {**entries[key], "submission_feedback": feedback[key]}
+                lineage.update(records)
+
+            def submit(key, value):
+                if key not in entries or type(value) is not node.output:
+                    raise ValueError("unexpected key or output type")
+                if key not in missing:
+                    if self.store.read(results[key]) == value:
+                        return
+                    raise ValueError("conflicting duplicate submission")
+                slot, bindings, _ = jobs[key]
+                results[key] = self.cache[slot] = self.store.save(
+                    slot, value, bindings
+                )
+                del missing[key]
+
+            try:
+                diagnostics = await self.backend.generate(node, entries, lineage, submit)
                 for key in missing:
-                    entries[key], records = jobs[key][2]
-                    lineage.update(records)
-
-                def submit(key, value):
-                    if key not in entries or type(value) is not node.output:
-                        raise ValueError("unexpected key or output type")
-                    if key not in missing:
-                        if self.store.read(results[key]) == value:
-                            return
-                        raise ValueError("conflicting duplicate submission")
-                    slot, bindings, _ = jobs[key]
-                    results[key] = self.cache[slot] = self.store.save(
-                        slot, value, bindings
-                    )
-                    del missing[key]
-
-                try:
-                    await self.backend.generate(node, entries, lineage, submit)
-                except (ConnectionError, TimeoutError):
-                    if missing and attempt + 1 == self.attempts:
-                        raise
-                if not missing:
-                    break
-            if missing:
+                    feedback[key] = (diagnostics or {}).get(key, "No output was submitted.")
+            except (ConnectionError, TimeoutError):
+                if missing and attempt + 1 == self.attempts:
+                    raise
+            if not missing:
+                break
+        if missing:
+            scope = parent.scope
+            if scope is None:
                 raise RuntimeError(f"missing submissions: {list(missing)}")
+            for key in missing:
+                slot, bindings, _ = jobs[key]
+                item = parent.item if parent.item is not None else key
+                message = f"No valid submission after {self.attempts} attempts. {feedback[key]}"
+                verdict = self.store.save(slot, {"missing_submission": message}, bindings)
+                scope.reject(item, node.name, "missing_submission", message, verdict)
+                self.candidate_failures[verdict] = scope.current(item).failure
+                self.cache[slot] = verdict

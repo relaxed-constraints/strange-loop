@@ -101,3 +101,5 @@ A grader can use a separate length limit to check them.
 Pass each dependency as an argument to the stage or grader that uses it.
 For external data, pass a snapshot identifier if changes must trigger another check.
 Reuse applies within one call to `runner.run`. A new run starts with an empty cache.
+
+If a stage finishes without a valid submission, the runner retries only the missing keys. After `attempts` calls (three by default), each unresolved candidate gets a `missing_submission` failure. Other slots continue. The usual replacement policy applies. Codex retries receive the collection error in `work.json` under `submission_feedback`. These attempts use no grader repair budget.

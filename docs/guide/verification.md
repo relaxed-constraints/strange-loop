@@ -64,3 +64,13 @@ Use `{language}` to insert the value of a stage argument named `language`. Use o
 Each input in the prompt must have the same value for every entry in that turn. Keep varying inputs in `work.json`. The adapter inserts strings directly and encodes other values as JSON. It expands each placeholder once.
 
 The adapter selects the prompt separately for each attempt. An input that the repair prompt omits appears in the repair entry under `inputs`. The agent writes each answer to the path in `output_file`. For example, the key `welcome` uses `welcome.json`.
+
+Use `Batch(max_items=4, concurrency=4)` to run up to four batches at the same
+time. Each backend call receives up to four items. With the Codex backend each
+call launches its own box. Custom backends must support overlapping calls when
+you enable concurrency. The default concurrency is one.
+
+The runner retries missing submissions within their batch. A free worker
+can start the next batch while another worker waits for a response. The mapped
+call returns after all batches finish. An unhandled error cancels sibling workers
+and waits for their cleanup. Concurrent worker errors propagate as an exception group.
