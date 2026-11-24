@@ -1,0 +1,163 @@
+"""Transactional run metadata, immutable versions and append-only trace records."""
+
+from __future__ import annotations
+
+import base64
+import json
+import sqlite3
+from contextlib import closing
+from functools import cached_property
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
+
+from .codecs import Codecs
+
+if TYPE_CHECKING:
+    from .replay import Bindings, Loop
+
+
+class StoredValue:
+    def __init__(self, store: Checkpoints, run: str, version: str) -> None:
+        self.store, self.run, self.version = store, run, version
+
+    @cached_property
+    def value(self) -> Any:
+        with closing(sqlite3.connect(self.store.path)) as db:
+            name, data = db.execute("SELECT codec, payload FROM versions WHERE run=? AND id=?",
+                                    (self.run, self.version)).fetchone()
+        return self.store.codecs.decode(name, data)
+
+
+class Checkpoints:
+    def __init__(self, path: str | Path, codecs: Codecs) -> None:
+        self.path = path
+        self.codecs = codecs
+        with closing(sqlite3.connect(path)) as db, db:
+            db.executescript("""
+                CREATE TABLE IF NOT EXISTS runs (
+                    id TEXT PRIMARY KEY, generation INTEGER NOT NULL, metadata TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS versions (
+                    run TEXT, id TEXT, artifact TEXT, actor TEXT, bindings TEXT, previous TEXT,
+                    adopted TEXT, request TEXT, slot TEXT, codec TEXT, payload BLOB,
+                    PRIMARY KEY(run,id));
+                CREATE TABLE IF NOT EXISTS events (
+                    run TEXT, seq INTEGER, subject TEXT, message TEXT, flow TEXT, stage TEXT,
+                    PRIMARY KEY(run,seq));
+                CREATE TABLE IF NOT EXISTS batches (
+                    run TEXT, seq INTEGER, stage TEXT, keys TEXT, PRIMARY KEY(run,seq));
+            """)
+
+    def bindings(self, bindings: Bindings) -> str:
+        result = []
+        for name, bound in bindings:
+            if bound[0] == "encoded":
+                bound = ("encoded", bound[1], base64.b64encode(bound[2]).decode())
+            result.append((name, bound))
+        return json.dumps(result)
+
+    def restore_bindings(self, data: str) -> Bindings:
+        result = []
+        for name, bound in json.loads(data):
+            if bound[0] == "encoded":
+                bound = ("encoded", bound[1], base64.b64decode(bound[2]))
+            elif bound[0] == "members":
+                bound = ("members", tuple(map(tuple, bound[1])))
+            result.append((name, tuple(bound)))
+        return tuple(result)
+
+    def write(self, run: Loop) -> None:
+        from .replay import Version
+
+        key = run.run_id
+        def ids(mapping):
+            return {k: v.id for k, v in mapping.items()}
+
+        metadata = json.dumps(dict(
+            attempts=run.attempts, limit=run.max_revisions, mapped=run._mapped, flow=run._flow_id,
+            roots=ids(run._roots), finished=ids(run._finished), iterations=run._iterations,
+            status=run.status, result=run.result.id if isinstance(run.result, Version) else None,
+        ))
+        with closing(sqlite3.connect(self.path)) as db, db:
+            if run._generation == 0:
+                try:
+                    db.execute("INSERT INTO runs VALUES (?,1,?)", (key, metadata))
+                except sqlite3.IntegrityError as error:
+                    raise ValueError(f"Run already exists: {key}") from error
+            elif not db.execute("UPDATE runs SET generation=generation+1, metadata=? "
+                                "WHERE id=? AND generation=?", (metadata, key, run._generation)).rowcount:
+                raise RuntimeError("Run changed in another session. Reload before resuming.")
+
+            for ref in run._new_versions:
+                codec, data = self.codecs.encode(ref.value)
+                request = None
+                if ref.request:
+                    feedback = ref.request.feedback
+                    request = [ref.request.target.id, isinstance(feedback, Version),
+                               feedback.id if isinstance(feedback, Version) else feedback]
+                db.execute("INSERT INTO versions VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                           (key, ref.id, ref.artifact, ref.actor, self.bindings(ref.inputs),
+                            ref.previous, ref.adopted_from, json.dumps(request),
+                            json.dumps(run._new_slots.get(ref.id)), codec, data))
+            for seq in range(run._saved_events, len(run._events)):
+                event = run._events[seq]
+                db.execute("INSERT INTO events VALUES (?,?,?,?,?,?)", (key, seq, event.key,
+                           event.message, json.dumps(event.flow), json.dumps(event.stage)))
+            for seq in range(run._saved_batches, len(run.batches)):
+                stage, keys = run.batches[seq]
+                db.execute("INSERT INTO batches VALUES (?,?,?,?)", (key, seq, stage, json.dumps(keys)))
+        run._generation += 1
+        run._new_versions.clear()
+        run._new_slots.clear()
+        run._saved_events = len(run._events)
+        run._saved_batches = len(run.batches)
+
+    def read(self, key: str, run: Loop) -> None:
+        from .replay import Revise, TraceEvent, Version
+
+        with closing(sqlite3.connect(self.path)) as db:
+            db.execute("BEGIN")
+            row = db.execute("SELECT generation,metadata FROM runs WHERE id=?", (key,)).fetchone()
+            if row is None:
+                raise KeyError(key)
+            run._generation, metadata = row
+            meta = json.loads(metadata)
+            run.run_id = key
+            run.attempts, run.max_revisions = meta["attempts"], meta["limit"]
+            run._mapped, run._flow_id = meta["mapped"], tuple(meta["flow"])
+            run.status = meta["status"]
+            run._iterations.update(meta["iterations"])
+            rows = db.execute("SELECT id,artifact,actor,bindings,previous,adopted,request,slot "
+                              "FROM versions WHERE run=? ORDER BY rowid", (key,))
+            for vid, artifact, actor, bindings, previous, adopted, request, slot in rows:
+                inputs = self.restore_bindings(bindings)
+                revision = None
+                if details := json.loads(request):
+                    target, is_ref, feedback = details
+                    revision = Revise(run.versions[target], run.versions[feedback] if is_ref else feedback)
+                ref = Version(vid, artifact, StoredValue(self, key, vid), actor, inputs,
+                              previous, adopted, revision)
+                run.versions[vid] = run.current[artifact] = ref
+                path, name, number = artifact.rsplit("/", 2)
+                run._counts[path, name] = max(run._counts[path, name], int(number))
+                if call := json.loads(slot):
+                    subject, identity, ordinal = call
+                    run.slots[subject, tuple(identity), ordinal, inputs] = artifact
+
+            run._roots = {k: run.versions[v] for k, v in meta["roots"].items()}
+            run._finished = {k: run.versions[v] for k, v in meta["finished"].items()}
+            if run.status == "completed":
+                run.result = ({k: run._finished[k] for k in run._roots} if run._mapped
+                              else run.versions[meta["result"]])
+            for subject, message, flow, stage in db.execute(
+                "SELECT subject,message,flow,stage FROM events WHERE run=? ORDER BY seq", (key,)
+            ):
+                run._events.append(TraceEvent(subject, message,
+                    tuple(json.loads(flow)) if flow != "null" else None,
+                    tuple(json.loads(stage)) if stage != "null" else None))
+            run.batches = [(stage, tuple(json.loads(keys))) for stage, keys in db.execute(
+                "SELECT stage,keys FROM batches WHERE run=? ORDER BY seq", (key,))]
+            run._saved_events, run._saved_batches = len(run._events), len(run.batches)
+
+    def keys(self) -> list[str]:
+        with closing(sqlite3.connect(self.path)) as db:
+            return [row[0] for row in db.execute("SELECT id FROM runs ORDER BY rowid")]

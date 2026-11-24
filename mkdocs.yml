@@ -2,20 +2,18 @@ INHERIT: .relcon-docs/base.yml
 site_name: Strange Loop
 site_url: http://localhost:8000/
 nav:
+  - Home: index.md
+  - Tutorial: tutorial.md
   - User Guide:
-      - Build a flow: index.md
-      - Example — follow one repair: guide/one-repair.md
-      - Batch and check items: guide/verification.md
-      - Repair or replace items: guide/candidates.md
-      - Inspect revisions: guide/lineage.md
+      - "What is Strange Loop?": guide/overview.md
+      - Stages and flows: guide/stages.md
+      - Artifacts and versions: guide/versions.md
+      - Checks and outcomes: guide/checks.md
+      - Revising and replacing: guide/revise.md
+      - Replay and reuse: guide/replay.md
+      - Mapping and joining: guide/mapping.md
+      - Batch stages: guide/batching.md
+      - Partial results and retries: guide/retries.md
+      - Execution traces and version history: guide/history.md
+      - Saving and resuming runs: guide/persistence.md
   - API Reference: reference.md
-plugins:
-  mkdocstrings:
-    handlers:
-      python:
-        paths: [src]
-        options:
-          show_root_heading: true
-          heading_level: 2
-          show_object_full_path: true
-          merge_init_into_class: true
