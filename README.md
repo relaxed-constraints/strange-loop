@@ -2,7 +2,9 @@
 
 Build Python workflows with versioned stage outputs, targeted revisions, batch execution, and SQLite recovery.
 
-With Python 3.12 or later:
+Install with `python -m pip install relcon-strange-loop` on Python 3.12 or later. Import the library with `from strange_loop import Loop`.
+
+To run the examples and tests from a checkout:
 
 ```sh
 uv sync
@@ -21,5 +23,5 @@ the tested wheel and source distribution to PyPI. The documentation workflow
 deploys the site from that release to [GitHub Pages](https://relaxed-constraints.github.io/strange-loop/).
 
 Before the first release, register a [pending PyPI publisher](https://pypi.org/manage/account/publishing/)
-for project `strange-loop`, owner `relaxed-constraints`, repository `strange-loop`,
+for project `relcon-strange-loop`, owner `relaxed-constraints`, repository `strange-loop`,
 workflow `release.yml`, and environment `pypi`.

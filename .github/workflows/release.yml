@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: pypi
-      url: https://pypi.org/p/strange-loop
+      url: https://pypi.org/p/relcon-strange-loop
     permissions:
       id-token: write
     steps:

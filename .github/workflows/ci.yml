@@ -48,7 +48,7 @@ jobs:
           uv venv /tmp/strange-loop-wheel
           uv pip install --python /tmp/strange-loop-wheel/bin/python dist/*.whl
           cd /tmp
-          /tmp/strange-loop-wheel/bin/python -c "from strange_loop import Loop, Version; assert Version(42).value == 42"
+          /tmp/strange-loop-wheel/bin/python -c "from importlib.metadata import version; from strange_loop import Loop, Version; print(version('relcon-strange-loop')); assert Version(42).value == 42"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: distributions
