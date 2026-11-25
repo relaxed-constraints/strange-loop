@@ -1,7 +1,10 @@
 """Run with python -m examples.workload. All timings are simulated."""
+import argparse
 import asyncio
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
-from strange_loop.replay import Loop, batch_stage, stage
+from strange_loop.replay import Loop, batch_stage, flow, stage
 
 SCAN = "SELECT RAW COUNT(*) FROM orders WHERE LOWER(status) = 'open'"
 INDEXED = "SELECT RAW COUNT(*) FROM orders WHERE status = 'open'"
@@ -33,6 +36,7 @@ def translate(batch):
     return {item.key: sql[item.inputs["source"]] for item in batch}
 
 
+@flow
 async def translate_query(ctx, source):
     return await translate(source=source)
 
@@ -50,11 +54,18 @@ def grade(elapsed, threshold):
 
 
 @stage
-def optimize(query, schema, verdict):
+def diagnose(query, schema, verdict):
     assert query == SCAN and schema[2:] == ("lowercase", "indexed") and not verdict
+    return "status is stored lowercase; compare it directly to use the status index."
+
+
+@stage
+def optimize(query, diagnosis):
+    assert query == SCAN and diagnosis
     return INDEXED
 
 
+@flow
 async def benchmark(ctx, dataset):
     layout = await schema(dataset=dataset)
     queries = await generate_queries(schema=layout)
@@ -65,20 +76,45 @@ async def benchmark(ctx, dataset):
         return elapsed
 
     slow = translations["q02"]  # Known bottleneck in this deterministic fixture.
-    fixed = await optimize(query=slow, schema=layout, verdict=passed)
+    reason = await diagnose(query=slow, schema=layout, verdict=passed)
+    fixed = await optimize(query=slow, diagnosis=reason)
     return ctx.replace(slow, with_=fixed)
 
 
-async def main():
-    run = Loop()
-    await run.map(benchmark, source={"workload": "orders fixture"})
-    print(run.trace())
-    for ref in run.versions.values():
-        if ref.actor == "time_workload":
-            print(f"{ref.value} ms", dict(ref.inputs)["queries"][1])
-        elif ref.actor == "grade":
-            print("threshold passed:", ref.value)
+def show_lineage(saved: Loop) -> None:
+    final = saved.result
+    revised = saved.input(final, "queries")["q02"]
+    original = saved.versions[revised.previous]
+    fix = saved.versions[revised.adopted_from]
+    diagnosis = saved.input(fix, "diagnosis")
+    verdict = saved.input(diagnosis, "verdict")
+    first = saved.input(verdict, "elapsed")
+
+    for timing in (first, final):
+        print(f"{timing.id} = {timing.value} ms")
+        for key, query in saved.input(timing, "queries").items():
+            print(f"  {key}: {query.id}")
+    print(f"Failed grade: {first.value} ms exceeds {saved.input(verdict, 'threshold')} ms")
+    print(f"{diagnosis.actor}(): {diagnosis.value}")
+    print(f"Previous SQL: {original.value}")
+    print(f"{revised.actor} adopted {fix.actor}() output {fix.id}: {revised.value}")
+
+
+async def demo(path: Path, inspect_only: bool) -> None:
+    if not inspect_only:
+        await Loop(store=path).run(benchmark, dataset="orders fixture", run_id="workload")
+    show_lineage(Loop(store=path).load("workload"))
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("database", type=Path, nargs="?")
+    parser.add_argument("--inspect", action="store_true", help="read a previously saved workload")
+    args = parser.parse_args()
+    if args.database:
+        asyncio.run(demo(args.database, args.inspect))
+    elif args.inspect:
+        parser.error("--inspect requires a database path")
+    else:
+        with TemporaryDirectory() as directory:
+            asyncio.run(demo(Path(directory) / "runs.sqlite", False))

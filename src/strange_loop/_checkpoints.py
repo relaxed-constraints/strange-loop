@@ -6,6 +6,7 @@ import base64
 import json
 import sqlite3
 from contextlib import closing
+from collections.abc import Mapping
 from functools import cached_property
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -21,11 +22,73 @@ class StoredValue:
         self.store, self.run, self.version = store, run, version
 
     @cached_property
-    def value(self) -> Any:
+    def payload(self) -> tuple[str, bytes]:
         with closing(sqlite3.connect(self.store.path)) as db:
             name, data = db.execute("SELECT codec, payload FROM versions WHERE run=? AND id=?",
                                     (self.run, self.version)).fetchone()
-        return self.store.codecs.decode(name, data)
+        return name, data
+
+    @property
+    def value(self) -> Any:
+        return self.store.codecs.decode(*self.payload)
+
+
+class StoredAttachments(Mapping):
+    def __init__(self, store, run, version, names):
+        self.store = store
+        self.run = run
+        self.version = version
+        self.names = names
+
+    def __iter__(self):
+        return iter(self.names)
+
+    def __len__(self):
+        return len(self.names)
+
+    def __getitem__(self, key):
+        if key not in self.names:
+            raise KeyError(key)
+        with closing(sqlite3.connect(self.store.path)) as db:
+            codec, data = db.execute("SELECT codec,payload FROM attachments "
+                                     "WHERE run=? AND version=? AND name=?",
+                                     (self.run, self.version, key)).fetchone()
+        return self.store.codecs.decode(codec, data)
+
+
+def outcome_record(value):
+    from .replay import Failure, MapResult, StaleVersion, Version
+
+    if isinstance(value, Version):
+        return value.id
+    if isinstance(value, MapResult):
+        return {"members": {k: outcome_record(v) for k, v in value.items()}}
+    if isinstance(value, Failure):
+        record = dict(key=value.key, kind=value.kind, reason=value.reason,
+                    target=value.target.id if value.target else None,
+                    evidence=outcome_record(value.evidence) if isinstance(value.evidence, Version) else None,
+                    feedback=value.evidence if isinstance(value.evidence, str) else None,
+                    causes={k: outcome_record(v) for k, v in (value.causes or {}).items()})
+        if isinstance(value, StaleVersion):
+            record["current"] = value.current.id
+        return record
+    return None
+
+
+def _restore_outcome(data, versions):
+    from .replay import Failure, MapResult, StaleVersion
+
+    if isinstance(data, str):
+        return versions[data]
+    if "members" in data:
+        return MapResult((k, _restore_outcome(v, versions)) for k, v in data["members"].items())
+    if "current" in data:
+        return StaleVersion(data["key"], data["reason"], target=versions[data["target"]],
+                            current=versions[data["current"]],
+                            evidence=versions.get(data["evidence"]) or data["feedback"])
+    return Failure(data["key"], data["reason"], data["kind"], versions.get(data["target"]),
+                   versions.get(data["evidence"]) or data["feedback"],
+                   {k: _restore_outcome(v, versions) for k, v in data["causes"].items()} or None)
 
 
 class Checkpoints:
@@ -40,6 +103,9 @@ class Checkpoints:
                     run TEXT, id TEXT, artifact TEXT, actor TEXT, bindings TEXT, previous TEXT,
                     adopted TEXT, request TEXT, slot TEXT, codec TEXT, payload BLOB,
                     PRIMARY KEY(run,id));
+                CREATE TABLE IF NOT EXISTS attachments (
+                    run TEXT, version TEXT, name TEXT, codec TEXT, payload BLOB,
+                    PRIMARY KEY(run,version,name));
                 CREATE TABLE IF NOT EXISTS events (
                     run TEXT, seq INTEGER, subject TEXT, message TEXT, flow TEXT, stage TEXT,
                     PRIMARY KEY(run,seq));
@@ -70,12 +136,15 @@ class Checkpoints:
 
         key = run.run_id
         def ids(mapping):
-            return {k: v.id for k, v in mapping.items()}
+            return {k: outcome_record(v) for k, v in mapping.items()}
 
         metadata = json.dumps(dict(
             attempts=run.attempts, limit=run.max_revisions, mapped=run._mapped, flow=run._flow_id,
+            collections=[[path, identity, ordinal, self.bindings(inputs), outcome_record(items)]
+                         for (path, identity, ordinal, inputs), items in run._collections.items()],
             roots=ids(run._roots), finished=ids(run._finished), iterations=run._iterations,
-            status=run.status, result=run.result.id if isinstance(run.result, Version) else None,
+            failures=[[k, refs, outcome_record(v)] for (k, refs), v in run._failures.items()],
+            status=run.status, result=outcome_record(run.result),
         ))
         with closing(sqlite3.connect(self.path)) as db, db:
             if run._generation == 0:
@@ -88,7 +157,10 @@ class Checkpoints:
                 raise RuntimeError("Run changed in another session. Reload before resuming.")
 
             for ref in run._new_versions:
-                codec, data = self.codecs.encode(ref.value)
+                codec, data = ref._value.payload
+                for name, item in ref._attachments.snapshots.items():
+                    db.execute("INSERT INTO attachments VALUES (?,?,?,?,?)",
+                               (key, ref.id, name, *item.payload))
                 request = None
                 if ref.request:
                     feedback = ref.request.feedback
@@ -112,7 +184,7 @@ class Checkpoints:
         run._saved_batches = len(run.batches)
 
     def read(self, key: str, run: Loop) -> None:
-        from .replay import Revise, TraceEvent, Version
+        from .replay import MapResult, Revise, TraceEvent, Version
 
         with closing(sqlite3.connect(self.path)) as db:
             db.execute("BEGIN")
@@ -126,6 +198,11 @@ class Checkpoints:
             run._mapped, run._flow_id = meta["mapped"], tuple(meta["flow"])
             run.status = meta["status"]
             run._iterations.update(meta["iterations"])
+            attachments = {}
+            for vid, name in db.execute(
+                "SELECT version,name FROM attachments WHERE run=?", (key,)
+            ):
+                attachments.setdefault(vid, []).append(name)
             rows = db.execute("SELECT id,artifact,actor,bindings,previous,adopted,request,slot "
                               "FROM versions WHERE run=? ORDER BY rowid", (key,))
             for vid, artifact, actor, bindings, previous, adopted, request, slot in rows:
@@ -134,8 +211,8 @@ class Checkpoints:
                 if details := json.loads(request):
                     target, is_ref, feedback = details
                     revision = Revise(run.versions[target], run.versions[feedback] if is_ref else feedback)
-                ref = Version(vid, artifact, StoredValue(self, key, vid), actor, inputs,
-                              previous, adopted, revision)
+                ref = Version._recorded(vid, artifact, StoredValue(self, key, vid), actor, inputs,
+                              previous, adopted, revision, StoredAttachments(self, key, vid, attachments.get(vid, ())))
                 run.versions[vid] = run.current[artifact] = ref
                 path, name, number = artifact.rsplit("/", 2)
                 run._counts[path, name] = max(run._counts[path, name], int(number))
@@ -143,11 +220,16 @@ class Checkpoints:
                     subject, identity, ordinal = call
                     run.slots[subject, tuple(identity), ordinal, inputs] = artifact
 
-            run._roots = {k: run.versions[v] for k, v in meta["roots"].items()}
-            run._finished = {k: run.versions[v] for k, v in meta["finished"].items()}
+            run._failures = {(k, tuple(refs)): _restore_outcome(v, run.versions)
+                             for k, refs, v in meta.get("failures", [])}
+            for path, identity, ordinal, bindings, items in meta.get("collections", []):
+                slot = (path, tuple(identity), ordinal, self.restore_bindings(bindings))
+                run._collections[slot] = _restore_outcome(items, run.versions)
+            run._roots = {k: _restore_outcome(v, run.versions) for k, v in meta["roots"].items()}
+            run._finished = {k: _restore_outcome(v, run.versions) for k, v in meta["finished"].items()}
             if run.status == "completed":
-                run.result = ({k: run._finished[k] for k in run._roots} if run._mapped
-                              else run.versions[meta["result"]])
+                run.result = (MapResult((k, run._finished[k]) for k in run._roots) if run._mapped
+                              else _restore_outcome(meta["result"], run.versions))
             for subject, message, flow, stage in db.execute(
                 "SELECT subject,message,flow,stage FROM events WHERE run=? ORDER BY seq", (key,)
             ):

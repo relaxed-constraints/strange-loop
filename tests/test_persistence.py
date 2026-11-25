@@ -32,13 +32,26 @@ class PersistenceTests(unittest.IsolatedAsyncioTestCase):
             path = Path(directory) / "runs.sqlite"
             loop = Loop(store=path)
             await loop.run(benchmark, dataset="orders fixture", run_id="example")
-            saved = loop.load("example")
+            saved = Loop(store=path).load("example")
             self.assertEqual(saved.trace(benchmark), loop.trace(benchmark))
             answer = await saved.resume(benchmark)
             self.assertEqual(answer.value, 50)
             sql = saved.input(answer, "queries")["q02"]
-            self.assertIsNotNone(sql.adopted_from)
-            self.assertIsNotNone(sql.previous)
+            fix = saved.versions[sql.adopted_from]
+            diagnosis = saved.input(fix, "diagnosis")
+            verdict = saved.input(diagnosis, "verdict")
+            first = saved.input(verdict, "elapsed")
+            self.assertEqual((first.value, saved.input(verdict, "threshold"), verdict.value),
+                             (130, 75, False))
+            self.assertIn("status index", diagnosis.value)
+            before = saved.input(first, "queries")
+            after = saved.input(answer, "queries")
+            self.assertEqual(sql.previous, before["q02"].id)
+            self.assertIs(saved.input(fix, "query"), before["q02"])
+            self.assertIs(saved.input(diagnosis, "query"), before["q02"])
+            for key in ("q01", "q03"):
+                self.assertIs(after[key], before[key])
+            self.assertEqual(len(saved.batches), 1)
             self.assertEqual(saved.trace(), loop.trace())
             with self.assertRaisesRegex(ValueError, "already exists"):
                 await Loop(store=path).run(benchmark, dataset="other", run_id="example")

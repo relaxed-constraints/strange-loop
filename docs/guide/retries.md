@@ -27,3 +27,23 @@ print(loop.trace("batch"))
 The first attempt accepts a and c. Only b enters the second attempt. Its accepted output is version 1. The attempts limit includes the initial execution. A semantic revision starts from an already accepted version and has a separate max_revisions budget.
 
 After submitting an item, return `None` or let the function end. Returning any dictionary in that attempt raises `BatchContractError`. Accepted versions remain recorded, and the runtime skips execution retries for this error.
+
+## Handling a failed item
+
+Return `ctx.fail(reason, target=version, evidence=verdict)` to finish the current invocation. The target and evidence are optional. A revision or replacement request beyond `max_revisions` produces a failure automatically. Stages retry timeout and connection errors up to the loop's attempt limit. A batch retries only its outstanding items. Unexpected exceptions and batch contract violations propagate.
+
+Both map methods collect outcomes in input order. A parent can use successful versions as inputs to another stage, or stop its own invocation when a complete collection is required.
+
+```python
+from strange_loop.replay import Context, Failure, Version
+from examples.failures import translate_query
+from examples.workload import time_workload
+
+async def workload(ctx: Context, queries: Version) -> Version | Failure:
+    translations = await ctx.map(translate_query, source=queries)
+    if translations.failed:
+        return ctx.fail("Incomplete workload", causes=translations.failed)
+    return await time_workload(queries=translations.succeeded)
+```
+
+Here `time_workload` is the timing stage from the workload example. Run `python -m examples.failures` to see one success, an exhausted revision budget, and an explicitly unsupported query in the same map. SQLite retains the terminal outcomes and their version references on resume.

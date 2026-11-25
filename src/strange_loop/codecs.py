@@ -3,7 +3,8 @@
 import base64
 import json
 import pickle
-from collections.abc import Callable, Iterable
+from copy import deepcopy
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -117,3 +118,42 @@ class Codecs:
         if name == "pickle" and self.allow_pickle:
             return pickle.loads(data)
         raise ValueError(f"Codec {name!r} is unavailable. Register or enable it to read this value.")
+
+
+@dataclass(frozen=True)
+class EncodedValue:
+    codecs: Codecs
+    payload: tuple[str, bytes]
+
+    def read(self) -> Any:
+        return self.codecs.decode(*self.payload)
+
+
+@dataclass(frozen=True)
+class MemoryValue:
+    snapshot: Any
+
+    def read(self) -> Any:
+        return deepcopy(self.snapshot)
+
+
+def capture(value: Any, codecs: Codecs, *, persistent: bool) -> EncodedValue | MemoryValue:
+    if persistent or any(isinstance(value, codec.type) for codec in codecs.custom.values()):
+        return EncodedValue(codecs, codecs.encode(value))
+    try:
+        return MemoryValue(deepcopy(value))
+    except Exception as error:
+        raise TypeError(f"Cannot copy {type(value).__name__}; register a codec for it.") from error
+
+class CapturedAttachments(Mapping[str, Any]):
+    def __init__(self, snapshots: dict[str, EncodedValue | MemoryValue]):
+        self.snapshots = snapshots
+
+    def __len__(self) -> int:
+        return len(self.snapshots)
+
+    def __iter__(self):
+        return iter(self.snapshots)
+
+    def __getitem__(self, key: str) -> Any:
+        return self.snapshots[key].read()
