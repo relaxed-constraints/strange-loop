@@ -3,10 +3,6 @@ name = "strange-loop"
 version = "0.1.0"
 description = "Revision-aware workflows for verified agent outputs"
 requires-python = ">=3.12"
-[project.optional-dependencies]
-codex = ["codex-box"]
-[tool.uv.sources]
-codex-box = {path = "../codex-box"}
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
