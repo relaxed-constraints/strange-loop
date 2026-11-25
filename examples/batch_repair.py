@@ -1,9 +1,20 @@
 """Run with python -m examples.batch_repair."""
+
 import asyncio
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from strange_loop.replay import Batch, Collection, Context, Failure, Loop, Version, batch_stage, flow, stage
+from strange_loop import (
+    Batch,
+    Collection,
+    Context,
+    Failure,
+    Loop,
+    Version,
+    batch_stage,
+    flow,
+    stage,
+)
 
 
 @stage
@@ -44,8 +55,9 @@ def generate_queries(names: list) -> Collection:
 
 
 @flow
-async def prepare_workload(ctx: Context, queries: Collection | None = None,
-                           names: Version | None = None) -> Collection:
+async def prepare_workload(
+    ctx: Context, queries: Collection | None = None, names: Version | None = None
+) -> Collection:
     if queries is None:
         queries = await generate_queries(names=names)
     checked = await ctx.map(check_query, query=queries)
@@ -56,15 +68,22 @@ async def prepare_workload(ctx: Context, queries: Collection | None = None,
 
 async def main() -> None:
     names = ["Alice", 42, -1, "Bob"]
-    supplied = Collection({f"q{i:02}": {"name": name} for i, name in enumerate(names, 1)})
+    supplied = Collection(
+        {f"q{i:02}": {"name": name} for i, name in enumerate(names, 1)}
+    )
     with TemporaryDirectory() as directory:
         path = Path(directory) / "runs.sqlite"
-        for label, inputs in [("supplied", {"queries": supplied}), ("generated", {"names": names})]:
+        for label, inputs in [
+            ("supplied", {"queries": supplied}),
+            ("generated", {"names": names}),
+        ]:
             await Loop(store=path).run(prepare_workload, run_id=label, **inputs)
             saved = Loop(store=path).load(label)
             repaired = saved.result["q02"]
             source = saved.input(repaired, "query")
-            print(f"{label}: {repaired.value} <- {source.actor} {source.id} {source.value}")
+            print(
+                f"{label}: {repaired.value} <- {source.actor} {source.id} {source.value}"
+            )
             if source.actor == "generate_queries":
                 print("  generator input:", saved.input(source, "names").value)
 

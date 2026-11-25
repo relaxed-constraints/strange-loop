@@ -4,10 +4,12 @@ Pass a SQLite file path to enable automatic checkpoints. Give a long-running exp
 
 ```python
 from examples.workload import benchmark
-from strange_loop.replay import Loop, Version
+from strange_loop import Loop, Version
 
 loop = Loop(store="experiments.sqlite")
-answer: Version = await loop.run(benchmark, dataset="orders fixture", run_id="workload-01")
+answer: Version = await loop.run(
+    benchmark, dataset="orders fixture", run_id="workload-01"
+)
 ```
 
 In a fresh session, open the saved run to inspect its chronological trace. Use the same flow code to resume. A completed run returns its saved result immediately.
@@ -46,7 +48,7 @@ Register a file codec when a class already supplies a single-file persistence fo
 
 ```python
 from bondi.workload import Workload
-from strange_loop.replay import FileCodec, Loop
+from strange_loop import FileCodec, Loop
 
 loop = Loop(store="runs.sqlite", codecs=[FileCodec(Workload, name="bondi.workload")])
 ```
@@ -55,7 +57,7 @@ Use a custom codec for an in-memory byte format. This example preserves the exac
 
 ```python
 from decimal import Decimal
-from strange_loop.replay import CustomCodec, Loop
+from strange_loop import CustomCodec, Loop
 
 decimal_codec = CustomCodec(
     type=Decimal,

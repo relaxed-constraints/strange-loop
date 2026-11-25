@@ -8,6 +8,13 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [dependency-groups]
+dev = [
+    "pytest>=9.2.0",
+    "ruff>=0.17.6",
+]
 docs = [
     "relcon-docs>=0.1.7,<1",
 ]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]

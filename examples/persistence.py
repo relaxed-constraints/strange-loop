@@ -5,7 +5,7 @@ import asyncio
 import os
 from pathlib import Path
 
-from strange_loop.replay import Batch, Context, Loop, Version, batch_stage
+from strange_loop import Batch, Context, Loop, Version, batch_stage
 
 interrupt = False
 
@@ -29,8 +29,11 @@ async def main(mode: str, path: Path) -> None:
     loop = Loop(store=path)
     if mode == "interrupt":
         interrupt = True
-        await loop.map(shout, source={"q01": "one", "q02": "two", "q03": "three"},
-                       run_id="three-queries")
+        await loop.map(
+            shout,
+            source={"q01": "one", "q02": "two", "q03": "three"},
+            run_id="three-queries",
+        )
     else:
         run = loop.load("three-queries")
         results = await run.resume(shout)

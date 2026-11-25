@@ -1,7 +1,8 @@
 """Run with python -m examples.replay from the checkout."""
+
 import asyncio
 
-from strange_loop.replay import Loop, batch_stage, stage
+from strange_loop import Loop, batch_stage, stage
 
 SOURCES = {"q01": "list orders", "q02": "count order lines", "q03": "list customers"}
 COUNT_ORDERS = "SELECT RAW COUNT(*) FROM orders"
@@ -27,7 +28,9 @@ async def translate(batch):
         if item.request is not None:
             request = item.request
             assert (item.inputs["source"], request.previous, request.feedback) == (
-                "list customers", BAD_CUSTOMERS, SYNTAX_FEEDBACK
+                "list customers",
+                BAD_CUSTOMERS,
+                SYNTAX_FEEDBACK,
             )
             sql = request.previous.replace(" FORM ", " FROM ")
         else:
@@ -49,7 +52,9 @@ def check(source, query):
 @stage
 def investigate(source, query, verdict):
     assert (source, query, verdict) == (
-        "count order lines", COUNT_ORDERS, "counted orders instead of lines"
+        "count order lines",
+        COUNT_ORDERS,
+        "counted orders instead of lines",
     )
     return COUNT_LINES
 

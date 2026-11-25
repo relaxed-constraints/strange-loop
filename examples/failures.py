@@ -1,13 +1,17 @@
 """Run with python -m examples.failures."""
+
 import asyncio
 
-from strange_loop.replay import Context, Failure, Loop, Revise, RevisionRequest, Version, stage
+from strange_loop import Context, Failure, Loop, Revise, RevisionRequest, Version, stage
 
 
 @stage(revisable=True)
 def translate(query: str, *, request: RevisionRequest | None) -> str:
     # This deterministic translator cannot improve the draft when asked to revise.
-    return {"list orders": "SELECT * FROM orders", "count orders": "SELECT count(*)"}.get(query, "")
+    return {
+        "list orders": "SELECT * FROM orders",
+        "count orders": "SELECT count(*)",
+    }.get(query, "")
 
 
 @stage
@@ -31,9 +35,15 @@ async def translate_query(ctx: Context, source: Version) -> Version | Failure | 
 
 async def main() -> None:
     loop = Loop()
-    results = await loop.map(translate_query, max_revisions=2, source={
-        "q01": "list orders", "q02": "count orders", "q03": "forecast orders",
-    })
+    results = await loop.map(
+        translate_query,
+        max_revisions=2,
+        source={
+            "q01": "list orders",
+            "q02": "count orders",
+            "q03": "forecast orders",
+        },
+    )
     for key, version in results.succeeded.items():
         print(key, version.value)
     for key, failure in results.failed.items():

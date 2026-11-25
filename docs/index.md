@@ -1,6 +1,6 @@
 # Strange Loop
 
-Build Python flows that can check a result, revise an upstream output, and reuse completed work. This documentation covers the replay prototype in `strange_loop.replay`.
+Build Python flows that can check a result, revise an upstream output, and reuse completed work. This documentation covers the replay prototype in `strange_loop`.
 
 From the checkout, run `uv sync` to install the project. The examples use deterministic Python stages and require no model credentials.
 

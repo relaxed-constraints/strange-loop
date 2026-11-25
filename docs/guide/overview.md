@@ -8,12 +8,15 @@ A workflow can give you an answer and still leave you wondering how it got there
 def double(number: int) -> int:
     return number * 2
 
+
 def increment(number: int) -> int:
     return number + 1
+
 
 def calculate(number: int) -> int:
     incr = increment(number)
     return double(incr)
+
 
 answer = calculate(10)
 print(answer)  # 22
@@ -26,20 +29,24 @@ The call to `increment()` produces the integer `11`, which `calculate()` passes 
 Below is the same calculation implemented with Strange Loop. 
 
 ```python
-from strange_loop.replay import Context, Loop, Version, stage
+from strange_loop import Context, Loop, Version, stage
+
 
 @stage
 def double(number: int) -> int:
     return number * 2
 
+
 @stage
 def increment(number: int) -> int:
     return number + 1
+
 
 async def calculate(ctx: Context, number: Version) -> Version:
     incr = await increment(number=number)
     dbl = await double(number=incr)
     return dbl
+
 
 loop = Loop()
 answer = await loop.run(calculate, number=10)
@@ -81,7 +88,7 @@ root = loop.input(parent, "number")
 
 print(answer.actor, answer.value)  # double 22
 print(parent.actor, parent.value)  # increment 11
-print(root.actor, root.value)      # <input> 10
+print(root.actor, root.value)  # <input> 10
 ```
 
 The actor label `<input>` marks a value supplied by the caller. Here it identifies the `10` passed to `loop.run`.

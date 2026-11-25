@@ -1,7 +1,8 @@
 """Run with python -m examples.nested_queries."""
+
 import asyncio
 
-from strange_loop.replay import Context, Loop, MapResult, Replacement, Version, flow, stage
+from strange_loop import Context, Loop, MapResult, Replacement, Version, flow, stage
 
 
 @stage
@@ -20,7 +21,10 @@ def explain(query: dict) -> str | None:
 @stage
 def fix_query(query: dict, feedback: str) -> dict:
     assert feedback == "name must be a string"
-    return {**query, "document": {**query["document"], "name": str(query["document"]["name"])}}
+    return {
+        **query,
+        "document": {**query["document"], "name": str(query["document"]["name"])},
+    }
 
 
 @flow

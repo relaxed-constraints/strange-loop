@@ -1,6 +1,6 @@
 # Prototype API reference
 
-Import the following names from `strange_loop.replay`.
+Import the following names from `strange_loop`.
 
 | Call | Contract |
 | --- | --- |

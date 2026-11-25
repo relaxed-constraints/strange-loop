@@ -5,15 +5,18 @@ After a correction the issuing flow re-enters from the top. Calls with matching 
 Run this example in a Python notebook.
 
 ```python
-from strange_loop.replay import Context, Loop, RevisionRequest, Revise, Version, stage
+from strange_loop import Context, Loop, RevisionRequest, Revise, Version, stage
+
 
 @stage(revisable=True)
 def positive(number: int, *, request: RevisionRequest | None) -> int:
     return number if request is None else abs(request.previous)
 
+
 @stage
 def valid(number: int) -> bool:
     return number > 0
+
 
 async def ensure_positive(ctx: Context, number: Version) -> Version | Revise:
     candidate = await positive(number=number)
@@ -21,6 +24,7 @@ async def ensure_positive(ctx: Context, number: Version) -> Version | Revise:
     if not verdict.value:
         return ctx.revise(candidate, feedback="Use the absolute value.")
     return candidate
+
 
 loop = Loop()
 await loop.run(ensure_positive, number=-3)

@@ -5,14 +5,17 @@ A batch stage collects compatible ready calls into one execution. Each waiting f
 Run this example in a Python notebook.
 
 ```python
-from strange_loop.replay import Batch, Context, Loop, Version, batch_stage
+from strange_loop import Batch, Context, Loop, Version, batch_stage
+
 
 @batch_stage
 def uppercase(batch: Batch) -> dict[str, str]:
     return {item.key: item.inputs["text"].upper() for item in batch}
 
+
 async def shout(ctx: Context, source: Version) -> Version:
     return await uppercase(text=source)
+
 
 loop = Loop()
 results = await loop.map(shout, source={"a": "one", "b": "two", "c": "three"})

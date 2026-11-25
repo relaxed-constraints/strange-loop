@@ -5,7 +5,8 @@ An async batch can submit each result as it arrives. Once submit returns, the ru
 Run this example in a Python notebook.
 
 ```python
-from strange_loop.replay import Batch, Context, Loop, Version, batch_stage
+from strange_loop import Batch, Context, Loop, Version, batch_stage
+
 
 @batch_stage
 async def echo(batch: Batch) -> None:
@@ -16,8 +17,10 @@ async def echo(batch: Batch) -> None:
     if len(batch) > 1:
         raise TimeoutError("simulated interruption")
 
+
 async def copy(ctx: Context, source: Version) -> Version:
     return await echo(text=source)
+
 
 loop = Loop(attempts=2)
 await loop.map(copy, source={"a": "one", "b": "two", "c": "three"})
@@ -35,9 +38,10 @@ Return `ctx.fail(reason, target=version, evidence=verdict)` to finish the curren
 Both map methods collect outcomes in input order. A parent can use successful versions as inputs to another stage, or stop its own invocation when a complete collection is required.
 
 ```python
-from strange_loop.replay import Context, Failure, Version
+from strange_loop import Context, Failure, Version
 from examples.failures import translate_query
 from examples.workload import time_workload
+
 
 async def workload(ctx: Context, queries: Version) -> Version | Failure:
     translations = await ctx.map(translate_query, source=queries)

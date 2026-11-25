@@ -1,10 +1,11 @@
 """Run with python -m examples.workload. All timings are simulated."""
+
 import argparse
 import asyncio
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from strange_loop.replay import Loop, batch_stage, flow, stage
+from strange_loop import Loop, batch_stage, flow, stage
 
 SCAN = "SELECT RAW COUNT(*) FROM orders WHERE LOWER(status) = 'open'"
 INDEXED = "SELECT RAW COUNT(*) FROM orders WHERE status = 'open'"
@@ -43,8 +44,12 @@ async def translate_query(ctx, source):
 
 @stage
 def time_workload(queries):
-    costs = {SCAN: 90, INDEXED: 10, "SELECT RAW COUNT(*) FROM orders": 15,
-             "SELECT RAW o FROM orders AS o": 25}
+    costs = {
+        SCAN: 90,
+        INDEXED: 10,
+        "SELECT RAW COUNT(*) FROM orders": 15,
+        "SELECT RAW o FROM orders AS o": 25,
+    }
     return sum(costs[sql] for sql in queries.values())
 
 
@@ -94,7 +99,9 @@ def show_lineage(saved: Loop) -> None:
         print(f"{timing.id} = {timing.value} ms")
         for key, query in saved.input(timing, "queries").items():
             print(f"  {key}: {query.id}")
-    print(f"Failed grade: {first.value} ms exceeds {saved.input(verdict, 'threshold')} ms")
+    print(
+        f"Failed grade: {first.value} ms exceeds {saved.input(verdict, 'threshold')} ms"
+    )
     print(f"{diagnosis.actor}(): {diagnosis.value}")
     print(f"Previous SQL: {original.value}")
     print(f"{revised.actor} adopted {fix.actor}() output {fix.id}: {revised.value}")
@@ -102,14 +109,18 @@ def show_lineage(saved: Loop) -> None:
 
 async def demo(path: Path, inspect_only: bool) -> None:
     if not inspect_only:
-        await Loop(store=path).run(benchmark, dataset="orders fixture", run_id="workload")
+        await Loop(store=path).run(
+            benchmark, dataset="orders fixture", run_id="workload"
+        )
     show_lineage(Loop(store=path).load("workload"))
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("database", type=Path, nargs="?")
-    parser.add_argument("--inspect", action="store_true", help="read a previously saved workload")
+    parser.add_argument(
+        "--inspect", action="store_true", help="read a previously saved workload"
+    )
     args = parser.parse_args()
     if args.database:
         asyncio.run(demo(args.database, args.inspect))

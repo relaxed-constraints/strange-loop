@@ -3,8 +3,8 @@
 import base64
 import json
 import pickle
-from copy import deepcopy
 from collections.abc import Callable, Iterable, Mapping
+from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -59,13 +59,17 @@ def _json_value(value: object) -> bool:
 
 
 class Codecs:
-    builtin = {"json", "tuple", "bytes", "pickle", "collection"}
+    builtin = frozenset({"json", "tuple", "bytes", "pickle", "collection"})
 
     def __init__(self, codecs: Iterable[Codec], allow_pickle: bool) -> None:
         self.custom: dict[str, Codec] = {}
         self.allow_pickle = allow_pickle
         for codec in codecs:
-            if not codec.name or codec.name in self.builtin or codec.name in self.custom:
+            if (
+                not codec.name
+                or codec.name in self.builtin
+                or codec.name in self.custom
+            ):
                 raise ValueError(f"Unavailable codec name: {codec.name!r}")
             self.custom[codec.name] = codec
 
@@ -88,14 +92,19 @@ class Codecs:
                 name, data = self.encode(item)
                 return [name, base64.b64encode(data).decode("ascii")]
 
-            entries = ([[pack(k), pack(v)] for k, v in value.items()] if type(value) is dict
-                       else [pack(v) for v in value])
+            entries = (
+                [[pack(k), pack(v)] for k, v in value.items()]
+                if type(value) is dict
+                else [pack(v) for v in value]
+            )
             return "collection", json.dumps([type(value).__name__, entries]).encode()
         try:
             return "pickle", pickle.dumps(value, protocol=pickle.HIGHEST_PROTOCOL)
         except Exception as error:
-            raise TypeError(f"No codec for {type(value).__qualname__} and pickle failed. "
-                            "Register a CustomCodec or FileCodec.") from error
+            raise TypeError(
+                f"No codec for {type(value).__qualname__} and pickle failed. "
+                "Register a CustomCodec or FileCodec."
+            ) from error
 
     def decode(self, name: str, data: bytes) -> Any:
         if name in self.custom:
@@ -107,9 +116,11 @@ class Codecs:
         if name == "bytes":
             return data
         if name == "collection":
+
             def unpack(item: list[str]) -> Any:
                 codec, encoded = item
                 return self.decode(codec, base64.b64decode(encoded))
+
             kind, entries = json.loads(data)
             if kind == "dict":
                 return {unpack(k): unpack(v) for k, v in entries}
@@ -117,7 +128,9 @@ class Codecs:
             return tuple(values) if kind == "tuple" else values
         if name == "pickle" and self.allow_pickle:
             return pickle.loads(data)
-        raise ValueError(f"Codec {name!r} is unavailable. Register or enable it to read this value.")
+        raise ValueError(
+            f"Codec {name!r} is unavailable. Register or enable it to read this value."
+        )
 
 
 @dataclass(frozen=True)
@@ -137,13 +150,20 @@ class MemoryValue:
         return deepcopy(self.snapshot)
 
 
-def capture(value: Any, codecs: Codecs, *, persistent: bool) -> EncodedValue | MemoryValue:
-    if persistent or any(isinstance(value, codec.type) for codec in codecs.custom.values()):
+def capture(
+    value: Any, codecs: Codecs, *, persistent: bool
+) -> EncodedValue | MemoryValue:
+    if persistent or any(
+        isinstance(value, codec.type) for codec in codecs.custom.values()
+    ):
         return EncodedValue(codecs, codecs.encode(value))
     try:
         return MemoryValue(deepcopy(value))
     except Exception as error:
-        raise TypeError(f"Cannot copy {type(value).__name__}; register a codec for it.") from error
+        raise TypeError(
+            f"Cannot copy {type(value).__name__}; register a codec for it."
+        ) from error
+
 
 class CapturedAttachments(Mapping[str, Any]):
     def __init__(self, snapshots: dict[str, EncodedValue | MemoryValue]):

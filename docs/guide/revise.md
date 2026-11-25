@@ -5,7 +5,16 @@ Use `ctx.revise` when the producer should try again. Use replacement when anothe
 Run this example in a Python notebook.
 
 ```python
-from strange_loop.replay import Context, Loop, RevisionRequest, Revise, Replacement, Version, stage
+from strange_loop import (
+    Context,
+    Loop,
+    RevisionRequest,
+    Revise,
+    Replacement,
+    Version,
+    stage,
+)
+
 
 @stage(revisable=True)
 def write(text: str, *, request: RevisionRequest | None) -> str:
@@ -13,11 +22,15 @@ def write(text: str, *, request: RevisionRequest | None) -> str:
         return text
     return request.previous.replace("teh", "the")
 
+
 @stage
 def correct(text: str) -> str:
     return text.replace("teh", "the")
 
-async def proofread(ctx: Context, text: Version, external: Version) -> Version | Revise | Replacement:
+
+async def proofread(
+    ctx: Context, text: Version, external: Version
+) -> Version | Revise | Replacement:
     draft = await write(text=text)
     if draft.value == "teh":
         if external.value:
@@ -25,6 +38,7 @@ async def proofread(ctx: Context, text: Version, external: Version) -> Version |
             return ctx.replace(draft, with_=fixed)
         return ctx.revise(draft, feedback="Transpose the last two letters.")
     return draft
+
 
 for external in (False, True):
     result = await Loop().run(proofread, text="teh", external=external)
@@ -44,7 +58,7 @@ replacement). These references remain inspectable after reopening SQLite.
 A parent can explicitly accept the winner for a conflicting item:
 
 ```python
-from strange_loop.replay import StaleVersion
+from strange_loop import StaleVersion
 
 for key, failure in results.failed.items():
     if isinstance(failure, StaleVersion):

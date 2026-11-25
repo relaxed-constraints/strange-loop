@@ -5,27 +5,33 @@ Loop.map starts independent flows from keyed inputs. Inside a flow, ctx.map star
 Run this example in a Python notebook.
 
 ```python
-from strange_loop.replay import Batch, Context, Loop, Version, stage
+from strange_loop import Batch, Context, Loop, Version, stage
+
 
 @stage
 def labels(prefix: str) -> dict[str, str]:
     return {"a": prefix, "b": prefix + "s"}
 
+
 @stage
 def length(text: str) -> int:
     return len(text)
 
+
 async def measure(ctx: Context, source: Version) -> Version:
     return await length(text=source)
+
 
 @stage
 def total(lengths: dict[str, int]) -> int:
     return sum(lengths.values())
 
+
 async def workload(ctx: Context, prefix: Version) -> Version:
     names = await labels(prefix=prefix)
     lengths = await ctx.map(measure, source=names)
     return await total(lengths=lengths)
+
 
 print((await Loop().run(workload, prefix="cat")).value)  # 7
 items = await Loop().map(measure, source={"a": "cat", "b": "cats"})

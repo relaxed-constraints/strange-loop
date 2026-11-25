@@ -5,19 +5,23 @@ An artifact identifies a logical output. A version identifies one value of that 
 Run this example in a Python notebook.
 
 ```python
-from strange_loop.replay import Context, Loop, Version, stage
+from strange_loop import Context, Loop, Version, stage
+
 
 @stage
 def normalize(text: str) -> str:
     return text.strip()
 
+
 @stage
 def length(text: str) -> int:
     return len(text)
 
+
 async def measure(ctx: Context, text: Version) -> Version:
     cleaned = await normalize(text=text)
     return await length(text=cleaned)
+
 
 loop = Loop()
 size = await loop.run(measure, text="  cat ")

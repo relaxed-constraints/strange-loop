@@ -3,16 +3,23 @@ import unittest
 from pathlib import Path
 
 from examples.failures import translate_query
-from strange_loop.replay import Loop, batch_stage, stage
+from strange_loop import Loop, batch_stage, stage
 
 
 class FailureTests(unittest.IsolatedAsyncioTestCase):
     async def test_three_queries_persist_and_resume(self):
         with tempfile.TemporaryDirectory() as tmp:
             loop = Loop(store=Path(tmp) / "runs.sqlite")
-            await loop.map(translate_query, max_revisions=2, run_id="demo", source={
-                "q01": "list orders", "q02": "count orders", "q03": "forecast orders",
-            })
+            await loop.map(
+                translate_query,
+                max_revisions=2,
+                run_id="demo",
+                source={
+                    "q01": "list orders",
+                    "q02": "count orders",
+                    "q03": "forecast orders",
+                },
+            )
             loaded = loop.load("demo")
             results = await loaded.resume(translate_query)
             self.assertEqual(list(results.succeeded), ["q01"])
@@ -51,7 +58,9 @@ class FailureTests(unittest.IsolatedAsyncioTestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             loop = Loop(store=Path(tmp) / "runs.sqlite")
-            await loop.run(workload, source={"q03": "forecast orders"}, run_id="workload")
+            await loop.run(
+                workload, source={"q03": "forecast orders"}, run_id="workload"
+            )
             failure = loop.load("workload").result
             self.assertEqual(failure.causes["q03"].target.value, "")
 

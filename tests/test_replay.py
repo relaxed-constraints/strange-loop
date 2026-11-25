@@ -1,24 +1,51 @@
 import unittest
 
-from examples.replay import BAD_CUSTOMERS, COUNT_LINES, CUSTOMERS, SYNTAX_FEEDBACK, SOURCES, translate_query
-from strange_loop.replay import Batch, BatchContractError, Loop, RevisionRequest, batch_stage, stage
+from examples.replay import (
+    BAD_CUSTOMERS,
+    COUNT_LINES,
+    CUSTOMERS,
+    SOURCES,
+    SYNTAX_FEEDBACK,
+    translate_query,
+)
+from strange_loop import (
+    Batch,
+    BatchContractError,
+    Loop,
+    RevisionRequest,
+    batch_stage,
+    stage,
+)
 
 
 class ReplayTests(unittest.IsolatedAsyncioTestCase):
     async def test_batch_replacement_and_replay_lineage(self):
         run = Loop()
         results = await run.map(translate_query, source=SOURCES)
-        self.assertEqual(run.batches, [("translate", tuple(SOURCES)), ("translate", ("q02",)), ("translate", ("q03",))])
+        self.assertEqual(
+            run.batches,
+            [
+                ("translate", tuple(SOURCES)),
+                ("translate", ("q02",)),
+                ("translate", ("q03",)),
+            ],
+        )
         full = run.trace().splitlines()
-        self.assertEqual(full, [
-            f"{i:02}  {key}  {message}"
-            for i, (key, message) in enumerate(run.events, 1)
-        ])
-        self.assertEqual(run.trace("q02").splitlines(), [
-            message for key, message in run.events if key == "q02"
-        ])
-        self.assertLess(run.events.index(("batch", "retry translate(): q02")),
-                        run.events.index(("batch", "translate() draft attempt 2: q02")))
+        self.assertEqual(
+            full,
+            [
+                f"{i:02}  {key}  {message}"
+                for i, (key, message) in enumerate(run.events, 1)
+            ],
+        )
+        self.assertEqual(
+            run.trace("q02").splitlines(),
+            [message for key, message in run.events if key == "q02"],
+        )
+        self.assertLess(
+            run.events.index(("batch", "retry translate(): q02")),
+            run.events.index(("batch", "translate() draft attempt 2: q02")),
+        )
         self.assertNotIn("replay", run.trace("q01"))
         self.assertIsNone(results["q01"].previous)
 
@@ -68,26 +95,30 @@ class ReplayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(loop.trace(workflow), loop.trace("workflow"))
         self.assertIn("finish draft() revise", loop.trace(draft))
         self.assertEqual(result.value, "EXAMPLE")
-        self.assertEqual(received, [
-            ("example", None), ("example", RevisionRequest("example", "uppercase"))
-        ])
+        self.assertEqual(
+            received,
+            [("example", None), ("example", RevisionRequest("example", "uppercase"))],
+        )
 
     async def test_mixed_batch_delivery_preserves_only_submitted_versions(self):
         for returned in ({}, {"q01": 1}, {"q02": 2}):
             with self.subTest(returned=returned):
-                @batch_stage
-                async def mixed(batch):
-                    self.assertIsInstance(batch, Batch)
-                    await batch["q01"].submit(1)
-                    return returned
+                await self._check_mixed_delivery(returned)
 
-                async def flow(ctx, source):
-                    return await mixed(source=source)
+    async def _check_mixed_delivery(self, returned):
+        @batch_stage
+        async def mixed(batch):
+            self.assertIsInstance(batch, Batch)
+            await batch["q01"].submit(1)
+            return returned
 
-                loop = Loop()
-                with self.assertRaises(ExceptionGroup) as failure:
-                    await loop.map(flow, source={"q01": 1, "q02": 2})
-                self.assertIsInstance(failure.exception.exceptions[0], BatchContractError)
-                self.assertEqual(loop.batches, [("mixed", ("q01", "q02"))])
-                accepted = [r for r in loop.versions.values() if r.actor == "mixed"]
-                self.assertEqual([r.value for r in accepted], [1])
+        async def flow(ctx, source):
+            return await mixed(source=source)
+
+        loop = Loop()
+        with self.assertRaises(ExceptionGroup) as failure:
+            await loop.map(flow, source={"q01": 1, "q02": 2})
+        self.assertIsInstance(failure.exception.exceptions[0], BatchContractError)
+        self.assertEqual(loop.batches, [("mixed", ("q01", "q02"))])
+        accepted = [r for r in loop.versions.values() if r.actor == "mixed"]
+        self.assertEqual([r.value for r in accepted], [1])

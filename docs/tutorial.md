@@ -45,9 +45,12 @@ Each accepted output has its own version. The second attempt fills the missing r
 Here is the flow from the example. The checker receives the decoded SQL, while the runtime records which SQL version it checked.
 
 ```python
-from strange_loop.replay import Context, Revise, Replacement, Version
+from strange_loop import Context, Revise, Replacement, Version
 
-async def translate_query(ctx: Context, source: Version) -> Version | Revise | Replacement:
+
+async def translate_query(
+    ctx: Context, source: Version
+) -> Version | Revise | Replacement:
     query = await translate(source=source)
     verdict = await check(source=source, query=query)
     if verdict.value == "pass":

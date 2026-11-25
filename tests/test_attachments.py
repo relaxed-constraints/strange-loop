@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from strange_loop.replay import Loop, Version, stage
+from strange_loop import Loop, Version, stage
 
 
 class AttachmentTests(unittest.IsolatedAsyncioTestCase):

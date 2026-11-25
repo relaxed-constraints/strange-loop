@@ -1,7 +1,7 @@
 import unittest
 
 from examples.workload import benchmark
-from strange_loop.replay import Loop
+from strange_loop import Loop
 
 
 class WorkloadTests(unittest.IsolatedAsyncioTestCase):
