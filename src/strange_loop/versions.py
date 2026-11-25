@@ -20,6 +20,21 @@ type Bindings = tuple[tuple[str, Binding], ...]
 
 @dataclass(frozen=True)
 class Version[T]:
+    """A value with optional attachments and a recorded history.
+
+    Args:
+        value: Output value to record.
+        attachments: Named auxiliary values such as an agent conversation.
+
+    Attributes:
+        id: Full version ID, assigned when the loop records the value.
+        artifact: Stable ID shared by successive versions of the same result.
+        actor: Stage, flow, or input label responsible for this version.
+        inputs: Recorded input bindings. Use Loop.inputs to resolve them.
+        previous: ID of the superseded version, if present.
+        adopted_from: ID of the version that supplied a replacement.
+        request: Revision instruction associated with the correction, if present.
+    """
     _value: T | StoredValue | EncodedValue | MemoryValue
     _attachments: Mapping[str, object]
     id: str | None = None
@@ -63,6 +78,7 @@ class Version[T]:
 
     @property
     def value(self) -> T:
+        """Read the payload associated with this version."""
         if isinstance(self._value, (EncodedValue, MemoryValue)):
             return self._value.read()
         return (
@@ -71,34 +87,64 @@ class Version[T]:
 
     @property
     def attachments(self) -> Mapping[str, object]:
+        """Auxiliary values indexed by attachment name."""
         return self._attachments
 
 
 @dataclass(frozen=True)
 class Replacement:
+    """Instruction to adopt a recorded correction.
+
+    Args:
+        target: Version to supersede.
+        source: Recorded version that supplies the new value.
+    """
     target: Version
     source: Version
 
 
 @dataclass(frozen=True)
 class Revise:
+    """Instruction to ask a producer for a correction.
+
+    Args:
+        target: Version to revise.
+        feedback: Plain feedback text or a version containing the finding.
+    """
     target: Version
     feedback: Version | str
 
 
 @dataclass(frozen=True)
 class RevisionRequest:
+    """Revision context passed to the producer on a revision attempt.
+
+    Args:
+        previous: Value of the target before the requested change.
+        feedback: Resolved feedback value.
+        target: Recorded target, including its attachments when available.
+    """
     previous: object
     feedback: object
     target: Version | None = field(default=None, compare=False)
 
 
 class Members(dict[str, Version]):
-    """Ordered keyed version handles returned by a mapped child flow."""
+    """A dictionary of recorded versions indexed by member key."""
 
 
 @dataclass(frozen=True)
 class Failure:
+    """An unsuccessful flow outcome with optional lineage.
+
+    Args:
+        key: Flow invocation key.
+        reason: Human-readable explanation.
+        kind: Category such as explicit failure or exhausted revision budget.
+        target: Version that the failure concerns.
+        evidence: Finding or text that explains the failure.
+        causes: Related child failures by key.
+    """
     key: str
     reason: str
     kind: str = "explicit"
@@ -109,7 +155,11 @@ class Failure:
 
 @dataclass(frozen=True, kw_only=True)
 class StaleVersion(Failure):
-    """The target was superseded. current is the winner observed at rejection."""
+    """Failure returned when another correction has already superseded the target.
+
+    Attributes:
+        current: Winning version observed when the loop rejected the stale correction.
+    """
 
     current: Version
     kind: str = "stale_version"
@@ -122,17 +172,24 @@ class _StaleAdoption(Exception):
 
 
 class Collection(dict):
-    """Keyed items, tracked individually at the input or stage-output boundary."""
+    """A dictionary of keyed items. The loop tracks each item individually."""
 
     @property
     def succeeded(self) -> Collection:
+        """A collection containing the Version entries in their original order."""
         return Collection((k, v) for k, v in self.items() if isinstance(v, Version))
 
     @property
     def failed(self) -> Collection:
+        """A collection containing the Failure entries in their original order."""
         return Collection((k, v) for k, v in self.items() if isinstance(v, Failure))
 
     def raise_for_failures(self) -> None:
+        """Check whether any item has a failure outcome.
+
+        Raises:
+            RuntimeError: One or more items failed. The message lists their keys and reasons.
+        """
         if failures := self.failed:
             raise RuntimeError(
                 ", ".join(f"{k}: {v.reason}" for k, v in failures.items())
@@ -140,6 +197,7 @@ class Collection(dict):
 
 
 MapResult = Collection
+"""Alias for Collection used for the keyed outcomes of a map call."""
 
 
 def binding(value: object, codecs: Codecs | None = None) -> Binding:

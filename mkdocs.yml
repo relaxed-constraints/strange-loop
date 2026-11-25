@@ -2,18 +2,35 @@ INHERIT: .relcon-docs/base.yml
 site_name: Strange Loop
 site_url: http://localhost:8000/
 nav:
-  - Home: index.md
-  - Tutorial: tutorial.md
-  - User Guide:
-      - "What is Strange Loop?": guide/overview.md
-      - Stages and flows: guide/stages.md
-      - Artifacts and versions: guide/versions.md
-      - Checks and outcomes: guide/checks.md
-      - Revising and replacing: guide/revise.md
-      - Replay and reuse: guide/replay.md
-      - Mapping and joining: guide/mapping.md
-      - Batch stages: guide/batching.md
-      - Partial results and retries: guide/retries.md
-      - Execution traces and version history: guide/history.md
-      - Saving and resuming runs: guide/persistence.md
-  - API Reference: reference.md
+  - Getting Started:
+      - Overview: index.md
+      - Installation: getting-started/installation.md
+      - Quickstart: getting-started/quickstart.md
+  - Concepts:
+      - Versions: concepts/versions.md
+      - Flows and runs: concepts/flows-and-runs.md
+      - Stages: concepts/stages.md
+      - Lineage and traces: concepts/lineage-and-traces.md
+      - Checks and failures: concepts/checks-and-failures.md
+      - Revisions and replacements: concepts/revisions-and-replacements.md
+      - Collections and mapping: concepts/collections-and-mapping.md
+      - Batch stages: concepts/batch-stages.md
+      - Persistence and resumption: concepts/persistence-and-resumption.md
+  - API Reference:
+      - Overview: reference/index.md
+      - Define flows and stages: reference/define-flows-and-stages.md
+      - Run, map, and resume: reference/run-map-and-resume.md
+      - Inspect results and lineage: reference/inspect-results-and-lineage.md
+      - Handle failures and corrections: reference/handle-failures-and-corrections.md
+      - Store custom values: reference/store-custom-values.md
+plugins:
+  mkdocstrings:
+    handlers:
+      python:
+        paths: [src]
+        options:
+          show_source: false
+          merge_init_into_class: true
+  llmstxt:
+    sections:
+      API Reference: ["reference/*.md"]

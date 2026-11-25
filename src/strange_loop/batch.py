@@ -20,22 +20,36 @@ type Pending = tuple[
 
 @dataclass(frozen=True)
 class BatchItem:
+    """One pending call in a batch attempt.
+
+    Attributes:
+        key: Key used to match a submission with its caller.
+        inputs: Named stage inputs with versions resolved to their values.
+        request: Revision details, or None for an initial call.
+    """
     key: str
     inputs: dict[str, Any]
     request: RevisionRequest | None
     _batch: Batch
 
     async def submit(self, value: object) -> None:
-        """Accept a result for this item before returning to the stage."""
+        """Accept this item’s output before the batch function returns.
+
+        Args:
+            value: Output for the caller associated with this item.
+
+        Raises:
+            BatchContractError: The attempt ended or this key already received a different value.
+        """
         self._batch._accept(self.key, value)
 
 
 class BatchContractError(ValueError):
-    """A stage used an invalid batch result or submission."""
+    """A batch attempt violated the submission contract, such as submitting and returning a dictionary."""
 
 
 class Batch:
-    """The items scheduled together for one execution attempt."""
+    """Items scheduled together for one attempt. Iterate over items, index by key, or use len(batch)."""
 
     def __init__(self, pending: Mapping[str, Pending], accept: Deliver) -> None:
         self._items = {

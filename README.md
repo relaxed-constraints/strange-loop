@@ -10,4 +10,4 @@ uv run python -m examples.batch_repair
 uv run python -m unittest discover -s tests -v
 ```
 
-[User guide](docs/guide/overview.md) · [Three-query tutorial](docs/tutorial.md)
+[Overview](docs/index.md) · [Installation](docs/getting-started/installation.md) · [Quickstart](docs/getting-started/quickstart.md)

@@ -40,7 +40,25 @@ class _AttemptsExhausted(Exception):
 
 
 class Loop:
-    """One mapped invocation. Values and literal inputs in this prototype are immutable."""
+    """Execute one run and keep its versions and trace.
+
+    Args:
+        attempts: Maximum attempts per stage call, including the initial attempt.
+        store: SQLite file path. Omit to keep the run in memory.
+        codecs: Serializers for custom value types.
+        allow_pickle: Allow decoding pickled values. Enable only for trusted data.
+
+    Attributes:
+        run_id: ID assigned when the run starts.
+        status: Run state: `new`, `incomplete`, or `completed`.
+        result: Final outcome, or None until the run completes.
+        versions: Recorded versions indexed by their full IDs.
+        current: Latest version for each artifact ID.
+        batches: Stage names and item keys grouped in each batch attempt.
+
+    Raises:
+        ValueError: The attempt limit is below one, or a codec name is unavailable.
+    """
 
     def __init__(
         self,
@@ -91,22 +109,55 @@ class Loop:
             raise ValueError("version belongs to a different Loop")
 
     def input(self, version: Version, name: str) -> object:
-        """Return the recorded input by name. An unknown name raises KeyError."""
+        """Follow one named input of a recorded version.
+
+        Args:
+            version: Output version recorded by this loop.
+            name: Input parameter to inspect.
+
+        Returns:
+            The exact input version, a keyed mapping of versions, or a literal value.
+
+        Raises:
+            ValueError: The version does not belong to this loop.
+            KeyError: The version has no input with this name.
+        """
         self._check_version(version)
         return self._resolve_binding(dict(version.inputs)[name])
 
     def inputs(self, version: Version) -> dict[str, object]:
-        """Resolve all named inputs to exact versions, keyed versions, or literals."""
+        """Follow all named inputs of a recorded version.
+
+        Args:
+            version: Output version recorded by this loop.
+
+        Returns:
+            Inputs keyed by parameter name. A root input has an empty mapping.
+
+        Raises:
+            ValueError: The version does not belong to this loop.
+        """
         self._check_version(version)
         return {name: self._resolve_binding(value) for name, value in version.inputs}
 
     @property
     def events(self) -> list[tuple[str, str]]:
-        """Chronological (invocation key, message) pairs."""
+        """Chronological pairs of invocation keys and event messages."""
         return [(event.key, event.message) for event in self._events]
 
     def trace(self, subject: str | Flow | Stage | None = None) -> str:
-        """Format the entire run, or select a flow, stage, or invocation."""
+        """Format recorded events in chronological order.
+
+        Args:
+            subject: Decorated stage, flow, or invocation key to select.
+                Omit to print numbered events for the whole run.
+
+        Returns:
+            The matching events as lines of text.
+
+        Raises:
+            KeyError: No event matches the supplied subject.
+        """
         if subject is None:
             return "\n".join(
                 f"{number:02}  {event.key}  {event.message}"
@@ -131,6 +182,13 @@ class Loop:
         return "\n".join(messages)
 
     def record(self, key: str, message: str, stage: Stage | None = None) -> None:
+        """Append a trace event to the run and checkpoint it.
+
+        Args:
+            key: Invocation key associated with the event.
+            message: Text shown in the trace.
+            stage: Stage to associate with the event for filtering.
+        """
         flow = self._flows.get(key)
         self._events.append(
             TraceEvent(
@@ -165,6 +223,15 @@ class Loop:
         return value
 
     def new_artifact(self, key: str, name: str) -> str:
+        """Allocate an artifact ID for a new result.
+
+        Args:
+            key: Invocation key that owns the result.
+            name: Producer or input name.
+
+        Returns:
+            The next artifact ID for this invocation and name.
+        """
         self._counts[key, name] += 1
         return f"{key}/{name}/{self._counts[key, name]}"
 
@@ -177,6 +244,23 @@ class Loop:
         adopted_from: str | None = None,
         request: Revise | None = None,
     ) -> Version:
+        """Record a new version of an artifact.
+
+        Args:
+            artifact: Stable artifact ID.
+            value: Output value or an unrecorded Version with attachments.
+            actor: Name of the producer or adopting flow.
+            inputs: Recorded bindings for the inputs used.
+            adopted_from: ID of the version supplying a replacement.
+            request: Revision instruction associated with this version.
+
+        Returns:
+            The recorded version, linked to the artifact’s previous version if present.
+
+        Raises:
+            ValueError: The supplied value is an already recorded Version.
+            KeyError: The source of a replacement is unknown.
+        """
         previous = self.current.get(artifact)
         number = int(previous.id.rsplit("@", 1)[1]) + 1 if previous else 1
         attachments = self.versions[adopted_from].attachments if adopted_from else {}
@@ -218,6 +302,21 @@ class Loop:
         *,
         request: RevisionRequest | None = None,
     ) -> Version:
+        """Execute a stage call with resolved inputs and accept its result.
+
+        Args:
+            node: Stage to execute.
+            key: Invocation key used for tracing and batch scheduling.
+            values: Resolved input arguments.
+            accept: Callback that records an output and returns the caller’s result.
+            request: Revision details for a producer revising its output.
+
+        Returns:
+            The result returned by the acceptance callback.
+
+        Raises:
+            ValueError: A batch already has a pending call with this key.
+        """
         if not node.batched:
             kwargs = dict(values)
             if node.revisable:
@@ -306,11 +405,26 @@ class Loop:
             self.store.write(self)
 
     def runs(self) -> list[str]:
-        """List saved run IDs in creation order."""
+        """List runs in this loop’s store.
+
+        Returns:
+            Run IDs in creation order, or an empty list for an in-memory loop.
+        """
         return self.store.keys() if self.store else []
 
     def load(self, run_id: str) -> Loop:
-        """Open a saved run for inspection or resumption."""
+        """Open a saved run for inspection or resumption.
+
+        Args:
+            run_id: ID of the run in this loop’s SQLite store.
+
+        Returns:
+            A new loop containing the saved run state.
+
+        Raises:
+            ValueError: This loop has no store.
+            KeyError: The run ID is absent from the store.
+        """
         if self.store is None:
             raise ValueError("load requires a store")
         loaded = Loop()
@@ -362,6 +476,21 @@ class Loop:
         run_id: str | None = None,
         **inputs: object,
     ) -> Version | Failure | MapResult:
+        """Start a flow with named inputs.
+
+        Args:
+            flow: Flow to execute.
+            max_revisions: Maximum replay iterations after the first pass per invocation.
+            run_id: Unique ID for this run. Omit to generate an ID.
+            **inputs: Named flow inputs. A Collection tracks each item individually.
+
+        Returns:
+            The flow’s final version, failure, or keyed collection of outcomes.
+
+        Raises:
+            ValueError: This loop already started, the revision limit is negative,
+                or the store already contains the run ID.
+        """
         self._start(flow, inputs, False, max_revisions, run_id)
         return await self._execute(flow)
 
@@ -373,10 +502,36 @@ class Loop:
         max_revisions: int = 3,
         run_id: str | None = None,
     ) -> MapResult:
+        """Start one flow invocation per source key.
+
+        Args:
+            flow: Flow that accepts the context and one source version.
+            source: Input values indexed by stable string keys.
+            max_revisions: Revision budget for each invocation.
+            run_id: Unique run ID. Omit to generate an ID.
+
+        Returns:
+            Keyed outcomes in source order, including any item failures.
+
+        Raises:
+            ValueError: This loop already started, the revision limit is negative,
+                or the store already contains the run ID.
+        """
         self._start(flow, source, True, max_revisions, run_id)
         return await self._execute(flow)
 
     async def resume(self, flow: Flow) -> Version | Failure | MapResult:
+        """Continue an interrupted run or return its completed result.
+
+        Args:
+            flow: The original flow, with compatible stage definitions.
+
+        Returns:
+            The saved result or the outcome after the remaining work completes.
+
+        Raises:
+            ValueError: The loop has no run or the flow identity differs.
+        """
         if self.status == "new":
             raise ValueError("load a run before resuming")
         if (flow.__module__, flow.__qualname__) != self._flow_id:

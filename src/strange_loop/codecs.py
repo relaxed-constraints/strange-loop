@@ -21,6 +21,14 @@ class Codec(Protocol):
 
 @dataclass(kw_only=True)
 class CustomCodec[T]:
+    """Adapt serializer functions to the run store.
+
+    Args:
+        type: Class whose instances this codec handles.
+        name: Unique codec identifier stored with the bytes. Reuse it when loading.
+        save: Function that converts an instance to bytes.
+        load: Function that reconstructs an instance from those bytes.
+    """
     type: type[T]
     name: str
     save: Callable[[T], bytes]
@@ -28,6 +36,16 @@ class CustomCodec[T]:
 
 
 class FileCodec:
+    """Adapt a class with file-based save and load methods to the run store.
+
+    Args:
+        cls: Class supporting cls.save(value, path) and cls.load(path).
+        name: Unique codec identifier stored with the bytes.
+        suffix: Optional filename suffix used for temporary files.
+
+    Raises:
+        ValueError: The suffix contains a path separator.
+    """
     def __init__(self, cls: type, *, name: str, suffix: str = "") -> None:
         self.type = cls
         self.name = name
@@ -36,12 +54,28 @@ class FileCodec:
             raise ValueError("suffix must be a filename suffix")
 
     def save(self, value: Any) -> bytes:
+        """Write a value to a temporary file and read its contents.
+
+        Args:
+            value: Instance to serialize with the registered class.
+
+        Returns:
+            The bytes produced by the class’s save method.
+        """
         with TemporaryDirectory() as directory:
             path = Path(directory) / ("value" + self.suffix)
             self.type.save(value, path)
             return path.read_bytes()
 
     def load(self, data: bytes) -> Any:
+        """Restore a value from the contents of a saved file.
+
+        Args:
+            data: Bytes produced by save.
+
+        Returns:
+            The value returned by the registered class’s load method.
+        """
         with TemporaryDirectory() as directory:
             path = Path(directory) / ("value" + self.suffix)
             path.write_bytes(data)

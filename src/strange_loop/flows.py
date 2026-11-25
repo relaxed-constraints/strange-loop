@@ -37,6 +37,7 @@ _active: ContextVar[Context] = ContextVar("replay_context")
 
 
 class Stage:
+    """Callable stage created by the stage and batch_stage decorators."""
     def __init__(
         self, fn: StageFunction, batched: bool = False, revisable: bool = False
     ) -> None:
@@ -57,6 +58,18 @@ class Stage:
             )
 
     async def __call__(self, **inputs: object) -> Version:
+        """Invoke the stage in the active flow.
+
+        Args:
+            **inputs: Named stage inputs, including versions or literal values.
+
+        Returns:
+            The recorded output. A regular non-revisable stage can also return a Collection.
+
+        Raises:
+            LookupError: The stage was called outside a flow.
+            TypeError: The caller supplied the runtime-managed revision request.
+        """
         if self.revisable and not self.batched and "request" in inputs:
             raise TypeError("Loop supplies the request parameter")
         return await _active.get().call(self, inputs)
@@ -77,7 +90,16 @@ def batch_stage(
     *,
     revisable: bool = False,
 ) -> Stage | Callable[[BatchFunction], Stage]:
-    """Pass a Batch to a function that returns keyed results or submits items."""
+    """Group pending stage calls into a batch attempt.
+
+    Args:
+        fn: Function that receives a Batch. Return a dictionary keyed by item,
+            or submit individual results and return None.
+        revisable: Allow revision attempts. Each item carries its own request.
+
+    Returns:
+        A callable stage, or a decorator when used with options.
+    """
 
     def decorate(function: BatchFunction) -> Stage:
         return Stage(function, batched=True, revisable=revisable)
@@ -100,7 +122,19 @@ def stage(
     *,
     revisable: bool = False,
 ) -> Stage | Callable[[StageFunction], Stage]:
-    """A revisable producer receives a runtime-supplied keyword argument, request."""
+    """Declare a synchronous or asynchronous stage.
+
+    Args:
+        fn: Function that receives the resolved input values.
+        revisable: Let the producer revise its output. Its function must accept
+            a keyword-only `request` parameter.
+
+    Returns:
+        A callable stage, or a decorator when used with options.
+
+    Raises:
+        TypeError: A revisable function lacks the required keyword-only parameter.
+    """
 
     def decorate(function: StageFunction) -> Stage:
         return Stage(function, revisable=revisable)
@@ -130,11 +164,19 @@ class _NestedFlow:
 
 
 def flow(body: Flow) -> _NestedFlow:
-    """Make a flow callable from another flow with its own replay boundary."""
+    """Declare an async flow with its own replay boundary.
+
+    Args:
+        body: Async function that accepts a Context followed by flow inputs.
+
+    Returns:
+        A flow suitable for Loop.run, mapping, or a nested call.
+    """
     return _NestedFlow(body)
 
 
 class Context:
+    """Operations available inside one flow invocation. The loop supplies this object."""
     def __init__(self, run: Loop, key: str) -> None:
         self.run = run
         self.key = key
@@ -150,14 +192,43 @@ class Context:
         evidence: Version | None = None,
         causes: Mapping[str, Failure] | None = None,
     ) -> Failure:
+        """Construct a failure outcome for this invocation.
+
+        Args:
+            reason: Human-readable reason for the failure.
+            target: Version that failed a check.
+            evidence: Version that detected the defect.
+            causes: Keyed child failures that contributed to this failure.
+
+        Returns:
+            A failure for the flow to return.
+        """
         return Failure(
             self.key, reason, target=target, evidence=evidence, causes=causes
         )
 
     def replace(self, target: Version, *, with_: Version) -> Replacement:
+        """Adopt a supplied correction when the flow returns this instruction.
+
+        Args:
+            target: Version to supersede.
+            with_: Recorded version that supplies the corrected value.
+
+        Returns:
+            A replacement instruction for the loop.
+        """
         return Replacement(target, with_)
 
     def revise(self, target: Version, *, feedback: Version | str) -> Revise:
+        """Ask a revisable stage to produce a new version.
+
+        Args:
+            target: Version produced by the revisable stage.
+            feedback: Feedback text or a recorded finding for the producer.
+
+        Returns:
+            A revision instruction for the flow to return.
+        """
         return Revise(target, feedback)
 
     async def map(
@@ -165,7 +236,20 @@ class Context:
         flow: Flow | _NestedFlow,
         **inputs: Version[Mapping[str, object]] | Mapping[str, Version | Failure],
     ) -> MapResult:
-        """Map a versioned collection or keyed outcomes, preserving input order."""
+        """Run a child flow for each item in one keyed input.
+
+        Args:
+            flow: Child flow to invoke.
+            **inputs: One parameter mapping keys to versions or failures, or a version
+                containing a keyed collection. The keyword names the child parameter.
+
+        Returns:
+            A collection of child outcomes in input order.
+
+        Raises:
+            TypeError: The caller supplied multiple inputs, no input, or a keyed
+                outcome other than a version or failure.
+        """
         if len(inputs) != 1:
             raise TypeError("ctx.map expects one keyed input")
         name, source = next(iter(inputs.items()))
@@ -194,6 +278,18 @@ class Context:
         return MapResult((key, task.result()) for key, task in tasks.items())
 
     async def call(self, node: Stage, inputs: dict[str, object]) -> Version:
+        """Resolve a stage call within this invocation.
+
+        Args:
+            node: Stage to call.
+            inputs: Named arguments supplied by the caller.
+
+        Returns:
+            A reused or newly recorded output, or the items of a Collection output.
+
+        Raises:
+            TypeError: A revisable or batched stage returned a Collection.
+        """
         ordinal = self.occurrences[node]
         self.occurrences[node] += 1
         bindings = tuple(
