@@ -2,7 +2,13 @@
 name = "strange-loop"
 version = "0.1.0"
 description = "Revision-aware workflows for verified agent outputs"
+readme = "README.md"
 requires-python = ">=3.12"
+
+[project.urls]
+Documentation = "https://relaxed-constraints.github.io/strange-loop/"
+Repository = "https://github.com/relaxed-constraints/strange-loop"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

@@ -1,6 +1,6 @@
 INHERIT: .relcon-docs/base.yml
 site_name: Strange Loop
-site_url: http://localhost:8000/
+site_url: https://relaxed-constraints.github.io/strange-loop/
 nav:
   - Getting Started:
       - Overview: index.md

@@ -35,6 +35,7 @@ class Version[T]:
         adopted_from: ID of the version that supplied a replacement.
         request: Revision instruction associated with the correction, if present.
     """
+
     _value: T | StoredValue | EncodedValue | MemoryValue
     _attachments: Mapping[str, object]
     id: str | None = None
@@ -99,6 +100,7 @@ class Replacement:
         target: Version to supersede.
         source: Recorded version that supplies the new value.
     """
+
     target: Version
     source: Version
 
@@ -111,6 +113,7 @@ class Revise:
         target: Version to revise.
         feedback: Plain feedback text or a version containing the finding.
     """
+
     target: Version
     feedback: Version | str
 
@@ -124,6 +127,7 @@ class RevisionRequest:
         feedback: Resolved feedback value.
         target: Recorded target, including its attachments when available.
     """
+
     previous: object
     feedback: object
     target: Version | None = field(default=None, compare=False)
@@ -145,6 +149,7 @@ class Failure:
         evidence: Finding or text that explains the failure.
         causes: Related child failures by key.
     """
+
     key: str
     reason: str
     kind: str = "explicit"

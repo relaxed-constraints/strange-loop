@@ -1,16 +1,9 @@
-# Project-owned workflow: configure creates this once and never overwrites it.
-name: Deploy documentation
-
+# Project-owned: deploy on published releases or manual requests.
+name: Documentation
 on:
-  workflow_dispatch: # Allow manual deployment.
-
-  # Uncomment to deploy on pushes to main (for example, consumer projects):
-  # push:
-  #   branches: [main]
-
-  # Or uncomment to deploy on published releases (for example, BONDI):
-  # release:
-  #   types: [published]
+  workflow_dispatch:
+  release:
+    types: [published]
 
 permissions:
   contents: read
@@ -19,5 +12,6 @@ permissions:
 
 jobs:
   docs:
-    # Replace @main with a reviewed commit SHA to pin the deployment implementation.
-    uses: relaxed-constraints/relcon-docs/.github/workflows/deploy-docs.yml@main
+    uses: relaxed-constraints/relcon-docs/.github/workflows/deploy-docs.yml@7a65409737b9e17086232b87ac95160ae58b2199
+    with:
+      python-version: "3.12"

@@ -38,6 +38,7 @@ _active: ContextVar[Context] = ContextVar("replay_context")
 
 class Stage:
     """Callable stage created by the stage and batch_stage decorators."""
+
     def __init__(
         self, fn: StageFunction, batched: bool = False, revisable: bool = False
     ) -> None:
@@ -177,6 +178,7 @@ def flow(body: Flow) -> _NestedFlow:
 
 class Context:
     """Operations available inside one flow invocation. The loop supplies this object."""
+
     def __init__(self, run: Loop, key: str) -> None:
         self.run = run
         self.key = key

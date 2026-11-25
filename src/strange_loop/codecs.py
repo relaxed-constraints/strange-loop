@@ -29,6 +29,7 @@ class CustomCodec[T]:
         save: Function that converts an instance to bytes.
         load: Function that reconstructs an instance from those bytes.
     """
+
     type: type[T]
     name: str
     save: Callable[[T], bytes]
@@ -46,6 +47,7 @@ class FileCodec:
     Raises:
         ValueError: The suffix contains a path separator.
     """
+
     def __init__(self, cls: type, *, name: str, suffix: str = "") -> None:
         self.type = cls
         self.name = name

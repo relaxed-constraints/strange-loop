@@ -27,6 +27,7 @@ class BatchItem:
         inputs: Named stage inputs with versions resolved to their values.
         request: Revision details, or None for an initial call.
     """
+
     key: str
     inputs: dict[str, Any]
     request: RevisionRequest | None
